@@ -5,9 +5,8 @@ import { useGraphStore } from '../../store/graph'
 import { Button } from '../ui/button'
 import { AreaChart, Area, XAxis, YAxis, Grid } from '../ui/area-chart'
 import { OperationsPanel } from '../graph/OperationsPanel'
+import { AddLinePanel } from '../graph/AddLinePanel'
 import type { DataSeries } from '../../../shared/types'
-
-// TODO(task 12): render <AddLinePanel /> when rightPanel === 'addLine'.
 
 /**
  * Pivot N series into a single row-per-date table for the chart.
@@ -118,6 +117,7 @@ export function GraphTab(): JSX.Element {
       {/* Right panel */}
       <AnimatePresence>
         {rightPanel === 'operations' && <OperationsPanel key="operations" />}
+        {rightPanel === 'addLine' && <AddLinePanel key="addLine" />}
       </AnimatePresence>
     </div>
   )

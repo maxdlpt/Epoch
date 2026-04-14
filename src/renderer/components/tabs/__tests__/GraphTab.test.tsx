@@ -40,9 +40,18 @@ const SERIES_B: DataSeries = {
 
 beforeEach(() => {
   useGraphStore.setState({ activeSeries: [], zoomDomain: null, rightPanel: null })
-  // Mock window.tsv for any downstream component that imports IPC wrappers.
+  // Mock window.tsv for any downstream component that imports IPC wrappers
+  // (OperationsPanel's SaveMenu, AddLinePanel's series list fetch, etc.).
   ;(globalThis as unknown as { window: { tsv: unknown } }).window.tsv = {
-    memory: { saveSeries: vi.fn().mockResolvedValue(undefined) },
+    memory: {
+      saveSeries: vi.fn().mockResolvedValue(undefined),
+      listSeries: vi.fn().mockResolvedValue([]),
+      getSeries: vi.fn().mockResolvedValue(null),
+    },
+    external: {
+      listSeries: vi.fn().mockResolvedValue([]),
+      getSeries: vi.fn().mockResolvedValue(null),
+    },
     dialog: { openDB: vi.fn(), saveDB: vi.fn() },
   } as unknown as typeof window.tsv
 })
