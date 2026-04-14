@@ -6,6 +6,9 @@ function makeId(): string {
   return crypto.randomUUID()
 }
 
+// TODO: dedupe in save flow — two uploads with a column named "Price" both yield
+// code 'PRICE' and collide on the schema's UNIQUE constraint. Handle when Task 12
+// SaveMenu is implemented.
 export function parseCSVText(csvText: string): DataSeries[] {
   // Normalize tabs to commas so pasted TSV data (e.g. from Excel) parses correctly.
   const normalized = csvText.replace(/\t/g, ',')

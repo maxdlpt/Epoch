@@ -9,6 +9,7 @@
   "compilerOptions": {
     "composite": true,
     "baseUrl": ".",
+    "types": ["@testing-library/jest-dom"],
     "paths": {
       "@renderer/*": ["src/renderer/*"],
       "@/*": ["src/renderer/*"]
