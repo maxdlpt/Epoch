@@ -1,8 +1,8 @@
 {
   "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
   "include": [
-    "src/renderer/src/**/*",
-    "src/renderer/src/**/*.tsx",
+    "src/renderer/**/*",
+    "src/renderer/**/*.tsx",
     "src/preload/*.d.ts",
     "src/shared/**/*"
   ],
@@ -10,8 +10,8 @@
     "composite": true,
     "baseUrl": ".",
     "paths": {
-      "@renderer/*": ["src/renderer/src/*"],
-      "@/*": ["src/renderer/src/*"]
+      "@renderer/*": ["src/renderer/*"],
+      "@/*": ["src/renderer/*"]
     }
   }
 }
