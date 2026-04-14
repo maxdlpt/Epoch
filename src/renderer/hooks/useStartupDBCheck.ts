@@ -26,6 +26,8 @@ export function useStartupDBCheck(): void {
   const settingsHydrated = useAppStore((s) => s.settingsHydrated)
 
   useEffect(() => {
+    // Early-return on the pre-hydrate pass; the effect re-fires when the flag
+    // flips false→true (see dep array) and the sweep runs on that second pass.
     if (!settingsHydrated) return
 
     let cancelled = false
