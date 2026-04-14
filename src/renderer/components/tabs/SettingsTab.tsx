@@ -1,30 +1,52 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertCircle, CheckCircle, FolderOpen } from 'lucide-react'
 import { useAppStore } from '../../store/app'
 import { useDBStore } from '../../store/db'
 import { PALETTES } from '../../lib/colors'
 import { applyTheme } from '../../lib/theme'
+import { ipc } from '../../lib/ipc'
 import { Button } from '../ui/button'
 
 type Theme = 'light' | 'dark' | 'system'
 const THEMES: readonly Theme[] = ['light', 'dark', 'system']
 
+// Derive a display name from the selected path: strip directory + ".db" suffix.
+// Windows and POSIX separators both handled; falls back to "external" for empty basenames.
+function deriveDBName(path: string): string {
+  const basename = path.split(/[\\/]/).pop() ?? ''
+  return basename.replace(/\.db$/i, '') || 'external'
+}
+
 export function SettingsTab() {
   const { theme, setTheme, colorPalette, setColorPalette } = useAppStore()
-  const { externalDBs } = useDBStore()
+  const { externalDBs, addExternalDB } = useDBStore()
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     applyTheme(theme)
   }, [theme])
 
-  // TODO(task-4): wire to `ipc.dialog.openDB()` once dev-1's Task 4 lands
-  // (preload exposes `window.tsv.dialog.openDB`). Flow will be:
-  //   1. const path = await ipc.dialog.openDB()
-  //   2. if (!path) return
-  //   3. const reachable = await ipc.external.checkPath(path)
-  //   4. useDBStore.getState().addExternalDB({ id: crypto.randomUUID(), name, path, reachable })
-  //   5. persist via ipc.settings.save(...)
-  const handleBrowseForDB = undefined
+  async function handleBrowseForDB(): Promise<void> {
+    setError(null)
+    const path = await ipc.dialog.openDB()
+    if (!path) return
+    const reachable = await ipc.external.checkPath(path)
+    if (!reachable) {
+      const basename = path.split(/[\\/]/).pop() ?? path
+      setError(`Couldn't open '${basename}' — not a valid TimeSeriesVisualiser database.`)
+      return
+    }
+    const newDB = {
+      id: crypto.randomUUID(),
+      name: deriveDBName(path),
+      path,
+      reachable: true,
+    }
+    addExternalDB(newDB)
+    // Persist the full AppSettings snapshot using the post-add store state.
+    const dbsAfter = useDBStore.getState().externalDBs
+    await ipc.settings.save({ theme, colorPalette, externalDBs: dbsAfter })
+  }
 
   return (
     <div className="flex flex-col gap-10 p-8 max-w-2xl mx-auto">
@@ -83,15 +105,19 @@ export function SettingsTab() {
         <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">External databases</h3>
 
         <div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleBrowseForDB}
-            disabled={!handleBrowseForDB}
-          >
+          <Button variant="outline" size="sm" onClick={handleBrowseForDB}>
             <FolderOpen className="h-4 w-4 mr-2" /> Browse for DB file
           </Button>
         </div>
+
+        {error && (
+          <p
+            role="alert"
+            className="text-sm text-red-600 dark:text-red-400"
+          >
+            {error}
+          </p>
+        )}
 
         <div className="space-y-2">
           {externalDBs.length === 0 && (
