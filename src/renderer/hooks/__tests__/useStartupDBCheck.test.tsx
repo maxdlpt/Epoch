@@ -17,7 +17,15 @@ vi.mock('../../lib/ipc', () => ({
 import { ipc } from '../../lib/ipc'
 
 beforeEach(() => {
-  useAppStore.setState({ theme: 'system', colorPalette: 'default' })
+  // settingsHydrated: true — the sweep gates on this flag (Task #25), so
+  // existing tests that exercise the sweep path must seed it to true to match
+  // the post-hydrate runtime state. A dedicated test below covers the
+  // !settingsHydrated no-op path.
+  useAppStore.setState({
+    theme: 'system',
+    colorPalette: 'default',
+    settingsHydrated: true,
+  })
   useDBStore.setState({ externalDBs: [] })
   vi.mocked(ipc.external.checkPath).mockReset()
   vi.mocked(ipc.settings.save).mockReset().mockResolvedValue(undefined)
@@ -97,6 +105,46 @@ describe('useStartupDBCheck', () => {
     // Short wait to make sure save isn't called late.
     await new Promise((r) => setTimeout(r, 20))
     expect(ipc.settings.save).not.toHaveBeenCalled()
+  })
+
+  it('does NOT probe when settingsHydrated is false (guards against pre-hydrate empty store)', async () => {
+    // Override beforeEach: simulate the pre-hydrate boot state where the store
+    // hasn't been populated yet. Even if we *pretend* there are DBs in store,
+    // the sweep must no-op because the flag says we haven't hydrated.
+    useAppStore.setState({ settingsHydrated: false })
+    useDBStore.setState({
+      externalDBs: [{ id: 'a', name: 'x', path: 'C:/a.db', reachable: true }],
+    })
+
+    const { unmount } = renderHook(() => useStartupDBCheck())
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(ipc.external.checkPath).not.toHaveBeenCalled()
+    expect(ipc.settings.save).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('runs the sweep once settingsHydrated flips from false to true (dep-array re-fires effect)', async () => {
+    useAppStore.setState({ settingsHydrated: false })
+    useDBStore.setState({
+      externalDBs: [{ id: 'a', name: 'x', path: 'C:/a.db', reachable: true }],
+    })
+    vi.mocked(ipc.external.checkPath).mockResolvedValue(true)
+
+    const { rerender } = renderHook(() => useStartupDBCheck())
+    // First render: flag false, sweep no-ops.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(ipc.external.checkPath).not.toHaveBeenCalled()
+
+    // Simulate hydrate completion: flip flag, re-render.
+    useAppStore.setState({ settingsHydrated: true })
+    rerender()
+
+    // Effect re-fires because dep array includes settingsHydrated.
+    await waitFor(() => {
+      expect(ipc.external.checkPath).toHaveBeenCalledTimes(1)
+    })
+    expect(ipc.external.checkPath).toHaveBeenCalledWith('C:/a.db')
   })
 
   it('cancels late-resolving probes on unmount (does not call updateReachability)', async () => {

@@ -16,8 +16,18 @@ import { useAppStore } from '../store/app'
 //    against the post-sweep store state, only call ipc.settings.save if any
 //    reachable actually flipped. Matches the settings-save semantics used in
 //    SettingsTab (full AppSettings replace, not a patch).
+//  - Task #25: subscribes to `settingsHydrated` so the effect re-fires when
+//    `useHydrateSettings` finishes populating the stores. Without this gate,
+//    the sweep would read the empty initial store on first boot, no-op at
+//    line :28, and `reachable` flags would only self-heal on the SECOND boot.
+//    Reading via hook subscription (not `.getState()`) is deliberate: we WANT
+//    the effect to re-fire when the flag flips, which requires the hook form.
 export function useStartupDBCheck(): void {
+  const settingsHydrated = useAppStore((s) => s.settingsHydrated)
+
   useEffect(() => {
+    if (!settingsHydrated) return
+
     let cancelled = false
 
     const dbs = useDBStore.getState().externalDBs
@@ -57,5 +67,5 @@ export function useStartupDBCheck(): void {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [settingsHydrated])
 }
