@@ -6,7 +6,9 @@
 
 **Architecture:** Electron main process owns all SQLite access (internal memory DB + external .db files) and exposes operations via typed IPC handlers; the React renderer calls these through a preload bridge and manages UI state with Zustand; @visx drives the chart canvas with scroll-wheel zoom, drag-select zoom, and animated right-side panels.
 
-**Tech Stack:** Electron 33, Vite 5, React 19, TypeScript 5, better-sqlite3, shadcn/ui, Tailwind CSS v4, @ark-ui/react, @visx/* suite, framer-motion/motion, Zustand, papaparse, xlsx, Vitest + React Testing Library, electron-builder.
+**Tech Stack:** Electron 33, Vite 5, React 18 (accepted divergence — team-lead ruling: React 19 was aspirational, 18 has guaranteed peer-dep support across @ark-ui/react, @visx/*, framer-motion, and shadcn), TypeScript 5, better-sqlite3, shadcn/ui, Tailwind CSS v4, @ark-ui/react, @visx/* suite, framer-motion/motion, Zustand, papaparse, xlsx, Vitest + React Testing Library, electron-builder.
+
+**Renderer layout convention (Task 1 addendum):** Option A chosen — all renderer code lives at `src/renderer/*` (no extra `/src/` sub-layer). Aliases in `electron.vite.config.ts`, `vitest.config.ts`, `tsconfig.web.json` resolve `@/` and `@renderer/` to `src/renderer`. The File Map below matches this layout verbatim.
 
 ---
 
@@ -335,6 +337,16 @@ describe('MemoryDB', () => {
     memDB.deleteSeries('s3')
     expect(memDB.listSeries()).toHaveLength(0)
   })
+
+  it('cascades point deletion when a series is deleted', () => {
+    memDB.saveSeries({
+      id: 's4', name: 'Y', code: 'Y', description: '',
+      points: [{ date: '2020-01-01', value: 1 }, { date: '2020-02-01', value: 2 }],
+    })
+    memDB.deleteSeries('s4')
+    const orphans = db.prepare("SELECT COUNT(*) as n FROM series_points WHERE series_id = 's4'").get() as { n: number }
+    expect(orphans.n).toBe(0)
+  })
 })
 ```
 
@@ -352,6 +364,9 @@ Expected: FAIL — `schema` / `memory` not found.
 import type Database from 'better-sqlite3'
 
 export function initSchema(db: Database.Database): void {
+  // Required: better-sqlite3 defaults foreign_keys OFF per connection,
+  // so ON DELETE CASCADE is a no-op without this pragma.
+  db.pragma('foreign_keys = ON')
   db.exec(`
     CREATE TABLE IF NOT EXISTS series (
       id          TEXT PRIMARY KEY,
