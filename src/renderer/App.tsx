@@ -4,6 +4,7 @@ import { GraphTab } from "./components/tabs/GraphTab"
 import { UploadTab } from "./components/tabs/UploadTab"
 import { SettingsTab } from "./components/tabs/SettingsTab"
 import { DBTab } from "./components/tabs/DBTab"
+import { NewGraphTab } from "./components/tabs/NewGraphTab"
 import { useAppStore } from "./store/app"
 import { useGraphStore } from "./store/graph"
 import { getColor } from "./lib/colors"
@@ -20,7 +21,6 @@ export default function App() {
   const customPalettes   = useAppStore(s => s.customPalettes)
   const theme            = useAppStore(s => s.theme)
   const settingsHydrated = useAppStore(s => s.settingsHydrated)
-
   useHydrateSettings()
   useStartupDBCheck()
   useAutoSaveSettings()
@@ -45,6 +45,7 @@ export default function App() {
   return (
     <AppLayout>
       {activeTab === 'graph' && <GraphTab />}
+      {activeTab === 'new-graph' && <NewGraphTab />}
       {activeTab === 'upload' && <UploadTab />}
       {activeTab === 'settings' && <SettingsTab />}
       {activeTab === 'db' && <DBTab />}

@@ -27,6 +27,19 @@ export function toGeomIndex(pts: DataPoint[]): DataPoint[] {
   })
 }
 
+/**
+ * Drawdown from running peak: ((value - peak) / peak) × 100.
+ * Always <= 0. Zero when at a new all-time high.
+ */
+export function toDrawdown(pts: DataPoint[]): DataPoint[] {
+  if (pts.length === 0) return []
+  let peak = -Infinity
+  return pts.map(p => {
+    if (p.value > peak) peak = p.value
+    return { date: p.date, value: ((p.value - peak) / peak) * 100 }
+  })
+}
+
 export function toPctChange(pts: DataPoint[]): DataPoint[] {
   return pts.map((p, i) => {
     if (i === 0) return { date: p.date, value: 0 }

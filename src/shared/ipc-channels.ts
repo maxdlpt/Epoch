@@ -22,9 +22,23 @@ export enum IPC {
   SESSION_GET             = 'session:get',
   SESSION_SAVE            = 'session:save',
 
+  // Screenshot
+  CAPTURE_RECT            = 'capture:rect',
+
+  // Saved graphs (.tsv-graph files)
+  GRAPH_SAVE              = 'graph:save',
+  GRAPH_LIST              = 'graph:list',
+  GRAPH_LOAD              = 'graph:load',
+  GRAPH_DELETE            = 'graph:delete',
+  GRAPH_IMPORT            = 'graph:import',
+  GRAPH_EXPORT            = 'graph:export',
+
   // File dialogs
   DIALOG_OPEN_DB          = 'dialog:open-db',
   DIALOG_SAVE_DB          = 'dialog:save-db',
+  DIALOG_CREATE_DB        = 'dialog:create-db',
+  DIALOG_SAVE_PNG         = 'dialog:save-png',
+  DIALOG_SAVE_CSV         = 'dialog:save-csv',
   DIALOG_EXPORT_SERIES    = 'dialog:export-series',
 
 }

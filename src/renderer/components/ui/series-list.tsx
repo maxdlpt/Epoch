@@ -106,6 +106,7 @@ export function MiniChart({ record, dbPath, dbId, className = 'h-10 w-28' }: Min
         className="h-full"
         animationDuration={350}
         margin={{ top: 0, right: 0, bottom: 0, left: 0 }}
+        showTooltip={false}
       >
         <Area
           dataKey={record.code}
@@ -334,9 +335,10 @@ export interface SeriesListProps {
   dbId: string | null
   onDelete: (id: string) => void
   onImportSeries: () => void
+  onRowClick?: (id: string) => void
 }
 
-export function SeriesList({ records, loading, error, dbPath, dbId, onDelete, onImportSeries }: SeriesListProps) {
+export function SeriesList({ records, loading, error, dbPath, dbId, onDelete, onImportSeries, onRowClick }: SeriesListProps) {
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
 
@@ -402,7 +404,11 @@ export function SeriesList({ records, loading, error, dbPath, dbId, onDelete, on
                 <motion.tr
                   key={r.id}
                   variants={rowVariants}
-                  className="border-b border-border last:border-none hover:bg-muted/40 transition-colors"
+                  onClick={() => onRowClick?.(r.id)}
+                  className={cn(
+                    'border-b border-border last:border-none hover:bg-muted/40 transition-colors',
+                    onRowClick && 'cursor-pointer',
+                  )}
                 >
                   {/* Name */}
                   <td className="p-4">
@@ -438,7 +444,7 @@ export function SeriesList({ records, loading, error, dbPath, dbId, onDelete, on
                   <td className="p-4 text-muted-foreground whitespace-nowrap">{fmtDate(r.endDate)}</td>
 
                   {/* Actions */}
-                  <td className="p-4 text-center">
+                  <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
                     <RowActions
                       record={r}
                       dbPath={dbPath}

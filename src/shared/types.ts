@@ -121,11 +121,44 @@ export interface SessionSeries {
 export interface GraphSession {
   series: SessionSeries[]
   zoomDomain: { start: string; end: string } | null
-  chartMode?: 'returns' | 'cumulative'
+  chartMode?: 'returns' | 'cumulative' | 'drawdown'
   cumMethod?: 'geometric' | 'arithmetic'
   cumBaseInput?: string
   showGrid?: boolean
   graphTitle?: string
+  savedFilename?: string      // filename in userData/graphs/ — tracks which file this graph was saved to
+}
+
+// ─── Multi-graph session (persisted between launches, version 2) ─────────────
+
+/**
+ * Envelope for persisting multiple open graphs across app restarts.
+ * The `version: 2` discriminant lets the restore hook distinguish this from the
+ * legacy single-graph `GraphSession` format (which has no `version` field).
+ */
+export interface MultiGraphSession {
+  version: 2
+  graphs: { id: string; session: GraphSession }[]
+  activeGraphId: string | null
+  graphsExpanded: boolean
+}
+
+// ─── Saved graph files (.tsv-graph) ─────────────────────────────────────────
+
+/** Full self-contained graph snapshot — the content of a .tsv-graph JSON file. */
+export interface SavedGraph {
+  version: 1
+  name: string
+  savedAt: string          // ISO timestamp
+  session: GraphSession
+}
+
+/** Lightweight metadata for listing saved graphs without loading full point data. */
+export interface SavedGraphMeta {
+  filename: string         // e.g. "abc123.tsv-graph"
+  name: string
+  savedAt: string
+  seriesCount: number
 }
 
 export interface AppSettings {

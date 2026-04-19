@@ -68,6 +68,32 @@ export function inferFreqFromRecord(
   return classify(span / (pointCount - 1))
 }
 
+/**
+ * Snap a UTC date to the canonical end-of-period for the given frequency.
+ *
+ *   monthly   → last calendar day of that month   (Apr 29 → Apr 30)
+ *   quarterly → last day of the quarter           (Feb 15 → Mar 31)
+ *   yearly    → Dec 31 of that year
+ *   daily     → no change
+ *
+ * Source datasets often stamp observations on a business day rather than the
+ * true calendar period-end.  Once detectFrequency classifies the data, the
+ * day-of-month is noise — snapping normalises it.
+ */
+export function snapToFrequency(date: Date, freq: DataFreq): Date {
+  if (freq === 'daily') return date
+  const y = date.getUTCFullYear()
+  const m = date.getUTCMonth() // 0-based
+  if (freq === 'yearly') return new Date(Date.UTC(y, 11, 31))
+  if (freq === 'quarterly') {
+    // Quarter: 0→Mar, 1→Jun, 2→Sep, 3→Dec
+    const qEnd = Math.floor(m / 3) * 3 + 3 // month after quarter-end (0-based)
+    return new Date(Date.UTC(y, qEnd, 0))   // day 0 = last day of prior month
+  }
+  // monthly: last day of this month
+  return new Date(Date.UTC(y, m + 1, 0))
+}
+
 /** Human-readable label for display. */
 export function formatFreq(freq: DataFreq): string {
   return freq.charAt(0).toUpperCase() + freq.slice(1)

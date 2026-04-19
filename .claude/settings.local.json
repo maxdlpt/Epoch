@@ -19,7 +19,9 @@
       "Bash(grep -v \"^\\\\.\\\\.$\")",
       "Bash(tasklist)",
       "Bash(npm uninstall:*)",
-      "Bash(node -e \"const electron = require\\('electron'\\); console.log\\('ok'\\)\")"
+      "Bash(node -e \"const electron = require\\('electron'\\); console.log\\('ok'\\)\")",
+      "Bash(npx electron-vite:*)",
+      "mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_pages"
     ]
   }
 }

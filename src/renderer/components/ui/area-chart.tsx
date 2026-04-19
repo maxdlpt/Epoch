@@ -1068,9 +1068,11 @@ export interface ChartTooltipProps {
    * lines below their parent series and match legend order.
    */
   order?: string[]
+  /** Vertical anchor. 'top' (default) pins near the top axis; 'bottom' pins near the bottom. */
+  anchor?: 'top' | 'bottom'
 }
 
-export function ChartTooltip({ rows, formatValue, order }: ChartTooltipProps) {
+export function ChartTooltip({ rows, formatValue, order, anchor = 'top' }: ChartTooltipProps) {
   const { tooltipData, lines, margin, innerWidth, containerRef, showTooltip } = useChart()
   const [container, setContainer] = useState<HTMLDivElement | null>(null)
 
@@ -1102,11 +1104,15 @@ export function ChartTooltip({ rows, formatValue, order }: ChartTooltipProps) {
 
   const fmt = formatValue ?? ((v: number | null) => v !== null ? v.toFixed(2) : '–')
 
+  const posStyle = anchor === 'bottom'
+    ? { left: animatedX, bottom: margin.bottom + 8 }
+    : { left: animatedX, top: margin.top + 8 }
+
   return createPortal(
     <motion.div
       aria-hidden="true"
       className="pointer-events-none absolute z-50"
-      style={{ left: animatedX, top: margin.top + 8 }}
+      style={posStyle}
       animate={{ x: showLeft ? 'calc(-100% - 16px)' : '16px' }}
       transition={{ type: 'tween', duration: 0.2, ease: 'easeOut' }}
     >
@@ -1383,6 +1389,8 @@ interface ChartInnerProps {
   onRightClickPoint?: (date: Date, clientX: number, clientY: number) => void
   freezeTooltip?: boolean
   showTooltip: boolean
+  yPadTop?: number
+  yClampMax?: number
 }
 
 function ChartInner({
@@ -1399,6 +1407,8 @@ function ChartInner({
   onRightClickPoint,
   freezeTooltip,
   showTooltip,
+  yPadTop,
+  yClampMax,
 }: ChartInnerProps) {
   const [isLoaded, setIsLoaded] = useState(false)
   const lines = useMemo(() => extractAreaConfigs(children), [children])
@@ -1445,14 +1455,19 @@ function ChartInner({
     }
     // Fallback when data is empty or all non-numeric
     if (!isFinite(minValue)) { minValue = 0; maxValue = 100 }
-    // Pad 10% of the value range on each side so lines don't kiss the axes
+    // Pad 10% of the value range on each side so lines don't kiss the axes.
+    // yPadTop overrides the top padding (useful for drawdown charts where all
+    // values are ≤ 0 and the origin would otherwise hug the top edge).
     const span = maxValue - minValue || Math.abs(maxValue) || 100
+    const topPad = yPadTop ?? 0.1
+    let domainMax = maxValue + span * topPad
+    if (yClampMax !== undefined) domainMax = Math.min(domainMax, yClampMax)
     return scaleLinear({
       range: [innerHeight, 0],
-      domain: [minValue - span * 0.1, maxValue + span * 0.1],
+      domain: [minValue - span * 0.1, domainMax],
       nice: true,
     })
-  }, [innerHeight, data, lines])
+  }, [innerHeight, data, lines, yPadTop, yClampMax])
 
   // "Jan 2000" format — used by the Crosshair DateTicker pill.
   // month+year is more informative than month+day for financial time-series.
@@ -1539,7 +1554,7 @@ function ChartInner({
           top: margin.top,
           width: innerWidth,
           height: innerHeight,
-          cursor: isLoaded ? (isPanning ? 'grabbing' : 'crosshair') : 'default',
+          cursor: !showTooltip ? 'default' : isLoaded ? (isPanning ? 'grabbing' : 'crosshair') : 'default',
           userSelect: 'none',
           pointerEvents: 'auto',
         }}
@@ -1565,6 +1580,10 @@ export interface AreaChartProps {
   onRightClickPoint?: (date: Date, clientX: number, clientY: number) => void
   freezeTooltip?: boolean
   showTooltip?: boolean
+  /** Override top Y-axis padding as a fraction of the value range (default 0.1 = 10%). */
+  yPadTop?: number
+  /** Hard upper bound for the Y-axis domain (e.g. 0 for drawdown charts). */
+  yClampMax?: number
 }
 
 export function AreaChart({
@@ -1580,6 +1599,8 @@ export function AreaChart({
   onRightClickPoint,
   freezeTooltip,
   showTooltip = true,
+  yPadTop,
+  yClampMax,
 }: AreaChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const margin = { ...DEFAULT_MARGIN, ...marginProp }
@@ -1605,6 +1626,8 @@ export function AreaChart({
             showTooltip={showTooltip}
             width={width}
             xDataKey={xDataKey}
+            yPadTop={yPadTop}
+            yClampMax={yClampMax}
           >
             {children}
           </ChartInner>

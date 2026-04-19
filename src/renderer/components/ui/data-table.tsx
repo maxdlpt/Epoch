@@ -8,9 +8,11 @@ import type { DBRecord, DataSeries } from '../../../shared/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
 function fmtDate(iso: string): string {
-  const d = new Date(iso)
-  return `${d.getFullYear()} ${d.toLocaleDateString('en-GB', { month: 'short' })}`
+  const [y, m, d] = iso.split('-')
+  return `${y} ${MONTHS[parseInt(m, 10) - 1]} ${d}`
 }
 
 function parseValue(raw: string): number | null {
@@ -711,32 +713,34 @@ export function DataTable({ records, dbPath, dbId, filter }: DataTableProps) {
 
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0">
-      {/* Save bar */}
-      <div className="flex items-center justify-between min-h-[32px]">
-        {saveError && (
-          <span className="text-xs text-destructive">{saveError}</span>
-        )}
-        {isDirty && !saveError && (
-          <span className="text-xs text-muted-foreground">Unsaved changes</span>
-        )}
-        <div className="ml-auto">
-          {isDirty && (
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium',
-                'bg-blue-600 hover:bg-blue-700 text-white transition-colors',
-                saving && 'opacity-60 cursor-not-allowed',
-              )}
-            >
-              <Save className="h-3.5 w-3.5" />
-              {saving ? 'Saving…' : 'Save changes'}
-            </button>
+      {/* Save bar — only rendered when there is something to show */}
+      {(isDirty || saveError) && (
+        <div className="flex items-center justify-between">
+          {saveError && (
+            <span className="text-xs text-destructive">{saveError}</span>
           )}
+          {isDirty && !saveError && (
+            <span className="text-xs text-muted-foreground">Unsaved changes</span>
+          )}
+          <div className="ml-auto">
+            {isDirty && (
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium',
+                  'bg-blue-600 hover:bg-blue-700 text-white transition-colors',
+                  saving && 'opacity-60 cursor-not-allowed',
+                )}
+              >
+                <Save className="h-3.5 w-3.5" />
+                {saving ? 'Saving…' : 'Save changes'}
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Table */}
       <div

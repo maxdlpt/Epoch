@@ -1,7 +1,7 @@
 import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
 import type { DataSeries } from '../../shared/types'
-import { detectFrequency } from './freq'
+import { detectFrequency, snapToFrequency } from './freq'
 
 function makeId(): string {
   return crypto.randomUUID()
@@ -153,13 +153,18 @@ export function parseCSVText(csvText: string): DataSeries[] {
         value: parseFloat(row[col]),
       }))
       .filter((p) => !isNaN(p.date.getTime()) && !isNaN(p.value))
+    const freq = detectFrequency(points)
+    // Snap dates to canonical period-end (e.g. Apr 29 → Apr 30 for monthly)
+    if (freq !== 'daily') {
+      for (const p of points) p.date = snapToFrequency(p.date, freq)
+    }
     return {
       id: makeId(),
       // Keep the user's original label for display, even if it's a duplicate.
       name: col.replace(/_\d+$/, ''),
       code: codes[i],
       description: '',
-      data_freq: detectFrequency(points),
+      data_freq: freq,
       source: 'memory' as const,
       points,
       // Snapshot copy: 'Reset to Raw' must restore these exactly even after
@@ -194,8 +199,15 @@ export function parseExcelBuffer(buffer: ArrayBuffer): DataSeries[] {
         continue
       }
       if (c === range.s.c && cell.t === 'd') {
-        // First column, date cell → ISO YYYY-MM-DD (always unambiguous)
-        cols.push((cell.v as Date).toISOString().slice(0, 10))
+        // First column, date cell → ISO YYYY-MM-DD (always unambiguous).
+        // XLSX cellDates creates Date objects in LOCAL time, so we must use
+        // getFullYear/getMonth/getDate (not toISOString which shifts to UTC
+        // and can move BST midnight dates back one day into the wrong month).
+        const d = cell.v as Date
+        const yyyy = d.getFullYear()
+        const mm = String(d.getMonth() + 1).padStart(2, '0')
+        const dd = String(d.getDate()).padStart(2, '0')
+        cols.push(`${yyyy}-${mm}-${dd}`)
       } else {
         // Everything else: use the pre-formatted display string if available,
         // fall back to the raw value as a string.

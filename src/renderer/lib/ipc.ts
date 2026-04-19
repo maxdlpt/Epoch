@@ -1,5 +1,5 @@
-import type { DataSeries, DBRecord, AppSettings, GraphSession, MAComponent, RawSeries, SessionMA, SessionSeries } from '../../shared/types'
-import { detectFrequency } from './freq'
+import type { DataSeries, DBRecord, AppSettings, GraphSession, MultiGraphSession, MAComponent, RawSeries, SavedGraph, SavedGraphMeta, SessionMA, SessionSeries } from '../../shared/types'
+import { detectFrequency, snapToFrequency } from './freq'
 
 function rawToDataSeries(
   raw: RawSeries,
@@ -7,11 +7,16 @@ function rawToDataSeries(
   dbId?: string,
 ): DataSeries {
   const points = raw.points.map((p) => ({ date: new Date(p.date), value: p.value }))
+  const freq = detectFrequency(points)
+  // Snap dates to canonical period-end (e.g. Apr 29 → Apr 30 for monthly)
+  if (freq !== 'daily') {
+    for (const p of points) p.date = snapToFrequency(p.date, freq)
+  }
   return {
     ...raw,
     source,
     dbId,
-    data_freq: detectFrequency(points),
+    data_freq: freq,
     points,
     // Defensive per-element clone: 'Reset to Raw' must restore these exactly
     // even after an in-place mutation of any point's `value` or `date`.
@@ -120,9 +125,26 @@ export const ipc = {
     openDB: (): Promise<string | null> => window.tsv.dialog.openDB(),
     saveDB: (path: string, ids: string[]): Promise<boolean> =>
       window.tsv.dialog.saveDB(path, ids),
+    createDB: (): Promise<string | null> => window.tsv.dialog.createDB(),
+    savePNG: (defaultName: string, pngData: Uint8Array): Promise<boolean> =>
+      window.tsv.dialog.savePNG(defaultName, pngData),
+    saveCSV: (defaultName: string, csvText: string): Promise<boolean> =>
+      window.tsv.dialog.saveCSV(defaultName, csvText),
   },
   session: {
-    get: (): Promise<GraphSession | null> => window.tsv.session.get(),
-    save: (s: GraphSession): Promise<void> => window.tsv.session.save(s),
+    get: (): Promise<GraphSession | MultiGraphSession | null> => window.tsv.session.get(),
+    save: (s: GraphSession | MultiGraphSession): Promise<void> => window.tsv.session.save(s),
+  },
+  graph: {
+    save: (payload: SavedGraph, existingFilename?: string): Promise<string> => window.tsv.graph.save(payload, existingFilename),
+    list: (): Promise<SavedGraphMeta[]> => window.tsv.graph.list(),
+    load: (filename: string): Promise<SavedGraph | null> => window.tsv.graph.load(filename),
+    delete: (filename: string): Promise<void> => window.tsv.graph.delete(filename),
+    import: (): Promise<SavedGraph | null> => window.tsv.graph.import(),
+    export: (payload: SavedGraph): Promise<boolean> => window.tsv.graph.export(payload),
+  },
+  capture: {
+    rect: (rect: { x: number; y: number; width: number; height: number }): Promise<Uint8Array | null> =>
+      window.tsv.capture.rect(rect),
   },
 }

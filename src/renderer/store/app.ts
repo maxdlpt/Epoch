@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { generateComplement } from '../lib/colors'
 import type { CustomPaletteEntry } from '../../shared/types'
 
-type Tab = 'graph' | 'upload' | 'settings' | 'db'
+type Tab = 'graph' | 'upload' | 'settings' | 'db' | 'new-graph'
 
 export const CHART_DEFAULT_WIDTH = 1024
 
@@ -26,7 +26,7 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  activeTab: 'graph',
+  activeTab: 'new-graph',
   theme: 'system',
   colorPalette: 'default',
   chartMaxWidth: CHART_DEFAULT_WIDTH,

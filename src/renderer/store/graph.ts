@@ -8,7 +8,7 @@ interface ZoomDomain {
 
 type RightPanel = 'operations' | 'addLine' | null
 
-export type ChartMode = 'returns' | 'cumulative'
+export type ChartMode = 'returns' | 'cumulative' | 'drawdown'
 export type CumMethod  = 'geometric' | 'arithmetic'
 
 interface GraphState {
@@ -20,6 +20,7 @@ interface GraphState {
   cumBaseInput: string
   showGrid: boolean
   graphTitle: string
+  savedFilename: string | null
   addSeries: (s: DataSeries) => void
   removeSeries: (id: string) => void
   updateSeries: (id: string, patch: Partial<DataSeries>) => void
@@ -32,6 +33,8 @@ interface GraphState {
   setCumBaseInput: (input: string) => void
   setShowGrid: (show: boolean) => void
   setGraphTitle: (title: string) => void
+  setSavedFilename: (filename: string | null) => void
+  resetGraph: () => void
 }
 
 export const useGraphStore = create<GraphState>((set) => ({
@@ -43,6 +46,7 @@ export const useGraphStore = create<GraphState>((set) => ({
   cumBaseInput: '',
   showGrid: true,
   graphTitle: 'New Graph',
+  savedFilename: null,
   addSeries: (s) => set((state) => ({
     activeSeries: state.activeSeries.find(x => x.id === s.id)
       ? state.activeSeries
@@ -84,4 +88,16 @@ export const useGraphStore = create<GraphState>((set) => ({
   setCumBaseInput: (input) => set({ cumBaseInput: input }),
   setShowGrid: (show) => set({ showGrid: show }),
   setGraphTitle: (title) => set({ graphTitle: title }),
+  setSavedFilename: (filename) => set({ savedFilename: filename }),
+  resetGraph: () => set({
+    activeSeries: [],
+    zoomDomain: null,
+    rightPanel: null,
+    chartMode: 'returns',
+    cumMethod: 'geometric',
+    cumBaseInput: '',
+    showGrid: true,
+    graphTitle: 'New Graph',
+    savedFilename: null,
+  }),
 }))

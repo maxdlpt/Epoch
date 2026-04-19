@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-channels'
-import type { AppSettings, GraphSession, RawSeries } from '../shared/types'
+import type { AppSettings, GraphSession, RawSeries, SavedGraph } from '../shared/types'
 
 contextBridge.exposeInMainWorld('tsv', {
   memory: {
@@ -26,9 +26,26 @@ contextBridge.exposeInMainWorld('tsv', {
   dialog: {
     openDB: () => ipcRenderer.invoke(IPC.DIALOG_OPEN_DB),
     saveDB: (path: string, ids: string[]) => ipcRenderer.invoke(IPC.DIALOG_SAVE_DB, path, ids),
+    createDB: () => ipcRenderer.invoke(IPC.DIALOG_CREATE_DB),
+    savePNG: (defaultName: string, pngData: Uint8Array) =>
+      ipcRenderer.invoke(IPC.DIALOG_SAVE_PNG, defaultName, pngData),
+    saveCSV: (defaultName: string, csvText: string) =>
+      ipcRenderer.invoke(IPC.DIALOG_SAVE_CSV, defaultName, csvText),
   },
   session: {
     get: () => ipcRenderer.invoke(IPC.SESSION_GET),
     save: (s: GraphSession) => ipcRenderer.invoke(IPC.SESSION_SAVE, s),
+  },
+  graph: {
+    save: (payload: SavedGraph, existingFilename?: string) => ipcRenderer.invoke(IPC.GRAPH_SAVE, payload, existingFilename),
+    list: () => ipcRenderer.invoke(IPC.GRAPH_LIST),
+    load: (filename: string) => ipcRenderer.invoke(IPC.GRAPH_LOAD, filename),
+    delete: (filename: string) => ipcRenderer.invoke(IPC.GRAPH_DELETE, filename),
+    import: () => ipcRenderer.invoke(IPC.GRAPH_IMPORT),
+    export: (payload: SavedGraph) => ipcRenderer.invoke(IPC.GRAPH_EXPORT, payload),
+  },
+  capture: {
+    rect: (rect: { x: number; y: number; width: number; height: number }) =>
+      ipcRenderer.invoke(IPC.CAPTURE_RECT, rect),
   },
 })

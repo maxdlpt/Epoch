@@ -1,19 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion, useMotionValue } from 'motion/react'
-import { ChevronDown, Eye, EyeOff, Plus, RotateCcw, X } from 'lucide-react'
+import { Check, ChevronDown, Eye, EyeOff, Plus, RotateCcw, Save, X } from 'lucide-react'
 import { useGraphStore } from '../../store/graph'
 import { useAppStore } from '../../store/app'
+import { useGraphManagerStore } from '../../store/graph-manager'
 import { Button } from '../ui/button'
 import { AreaChart, Area, XAxis, YAxis, Grid, SegmentBackground, SegmentLineFrom, SegmentLineTo, Crosshair, ChartTooltip, OriginLine, BaseLine } from '../ui/area-chart'
 import { AddLinePanel } from '../graph/AddLinePanel'
 import { SeriesEditPanel } from '../graph/SeriesEditPanel'
 import { cn } from '../../lib/utils'
+import { ipc, serializeSeries } from '../../lib/ipc'
 import { Selector } from '../ui/segment-group'
 import { computeMA } from '../../lib/ma'
 import type { ChartMode, CumMethod } from '../../store/graph'
 import { detectFrequency } from '../../lib/freq'
-import type { DataFreq, DataSeries, DataPoint } from '../../../shared/types'
+import type { DataFreq, DataSeries, DataPoint, SavedGraph } from '../../../shared/types'
+
+function ExportImageIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true">
+      <rect width="18" height="18" rx="2" transform="translate(3 3)" stroke="currentColor" strokeMiterlimit="10" strokeWidth="1.5" />
+      <circle cx="2" cy="2" r="2" transform="translate(9 6)" stroke="currentColor" strokeMiterlimit="10" strokeWidth="1.5" />
+      <path d="M0,5.616,4.776,2.121l3.773,2.9L13.8,0l3.835,2.1" transform="translate(3.226 11.839)" stroke="currentColor" strokeMiterlimit="10" strokeWidth="1.5" />
+    </svg>
+  )
+}
 
 function LineChartIcon({ className }: { className?: string }) {
   return (
@@ -173,6 +185,57 @@ function applyCumulativeReturns(
     }))
 
     return { ...s, points: cumPoints, movingAverages: newMAs }
+  })
+}
+
+/**
+ * Apply drawdown transform to all series.
+ *
+ * 1. Compound period returns into a cumulative wealth index (geometric).
+ * 2. Track the running peak of that index.
+ * 3. Drawdown = (wealth - peak) / peak × 100  — always ≤ 0.
+ *
+ * Uses the same intersection-date semantics as cumulative mode so all
+ * series start on the same date at 0%.
+ */
+function applyDrawdown(series: DataSeries[]): DataSeries[] {
+  if (series.length === 0) return series
+
+  const visible = series.filter(s => s.visible !== false)
+  if (visible.length === 0) return series
+
+  // Build timestamp intersection across all visible series
+  const sets = visible.map(s => new Set(s.originalPoints.map(p => p.date.getTime())))
+  const intersectionTs = new Set<number>(
+    [...sets[0]].filter(t => sets.every(set => set.has(t))),
+  )
+  if (intersectionTs.size === 0) return series
+
+  return series.map(s => {
+    const filtered = s.originalPoints.filter(p => intersectionTs.has(p.date.getTime()))
+    if (filtered.length === 0) return s
+
+    // Step 1: compound returns into a wealth index
+    let wealth = 1
+    const levels: number[] = []
+    for (const p of filtered) {
+      wealth *= (1 + p.value / 100)
+      levels.push(wealth)
+    }
+
+    // Step 2 & 3: running peak → drawdown percentage
+    let peak = levels[0]
+    const ddPoints: DataPoint[] = filtered.map((p, i) => {
+      if (levels[i] > peak) peak = levels[i]
+      return { date: p.date, value: ((levels[i] - peak) / peak) * 100 }
+    })
+
+    const newMAs = (s.movingAverages ?? []).map(ma => ({
+      ...ma,
+      points: computeMA(ddPoints, ma.type, ma.window),
+    }))
+
+    return { ...s, points: ddPoints, movingAverages: newMAs }
   })
 }
 
@@ -524,7 +587,7 @@ function resolveBaseDate(series: DataSeries[], baseInput: string): Date | null {
 }
 
 export function GraphTab(): JSX.Element {
-  const { activeSeries, removeSeries, reorderSeries, toggleSeriesVisibility, updateSeries, rightPanel, setRightPanel, zoomDomain, setZoomDomain, chartMode, setChartMode, cumMethod, setCumMethod, cumBaseInput, setCumBaseInput, showGrid, setShowGrid, graphTitle, setGraphTitle } = useGraphStore()
+  const { activeSeries, removeSeries, reorderSeries, toggleSeriesVisibility, updateSeries, rightPanel, setRightPanel, zoomDomain, setZoomDomain, chartMode, setChartMode, cumMethod, setCumMethod, cumBaseInput, setCumBaseInput, showGrid, setShowGrid, graphTitle, setGraphTitle, savedFilename, setSavedFilename } = useGraphStore()
   const activeTab        = useAppStore((s) => s.activeTab)
   const chartMaxWidth    = useAppStore((s) => s.chartMaxWidth)
   const setChartMaxWidth = useAppStore((s) => s.setChartMaxWidth)
@@ -538,6 +601,7 @@ export function GraphTab(): JSX.Element {
   // ── Export dropdown ───────────────────────────────────────────────────────
   const [exportOpen, setExportOpen] = useState(false)
   const exportRef = useRef<HTMLDivElement>(null)
+  const exportTitleRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!exportOpen) return
@@ -551,15 +615,63 @@ export function GraphTab(): JSX.Element {
   const handleExportPNG = useCallback(async () => {
     setExportOpen(false)
     const chartEl = document.querySelector('[data-testid="graph-chart"]') as HTMLElement | null
-    if (!chartEl) return
+    const titleEl = exportTitleRef.current
+    if (!chartEl || !titleEl) {
+      console.error('[ExportPNG] Missing elements:', { chartEl: !!chartEl, titleEl: !!titleEl })
+      return
+    }
+
     try {
-      const r = chartEl.getBoundingClientRect()
-      const pngBuffer = await ipc.capture.rect({ x: r.x, y: r.y, width: r.width, height: r.height })
-      if (!pngBuffer) return
-      const blob = new Blob([pngBuffer as BlobPart], { type: 'image/png' })
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      const dpr = window.devicePixelRatio || 1
+      const chartRect = chartEl.getBoundingClientRect()
+      const titleRect = titleEl.getBoundingClientRect()
+      // Capture both regions in parallel (add a few px to chart height to avoid legend clipping)
+      const [titleBuf, chartBuf] = await Promise.all([
+        ipc.capture.rect({ x: titleRect.x, y: titleRect.y, width: titleRect.width, height: titleRect.height }),
+        ipc.capture.rect({ x: chartRect.x, y: chartRect.y, width: chartRect.width, height: chartRect.height + 8 }),
+      ])
+      if (!titleBuf || !chartBuf) {
+        console.error('[ExportPNG] Capture returned null')
+        return
+      }
+
+      // Decode both images
+      const [titleImg, chartImg] = await Promise.all([
+        createImageBitmap(new Blob([titleBuf as BlobPart], { type: 'image/png' })),
+        createImageBitmap(new Blob([chartBuf as BlobPart], { type: 'image/png' })),
+      ])
+      // Stitch: title above chart, left-aligned to chart's left edge
+      const pad = Math.round(24 * dpr)
+      const gap = Math.round(12 * dpr)
+      const canvasW = chartImg.width + pad * 2
+      const canvasH = pad + titleImg.height + gap + chartImg.height + pad
+
+      const canvas = document.createElement('canvas')
+      canvas.width = canvasW
+      canvas.height = canvasH
+      const ctx = canvas.getContext('2d')!
+
+      // Fill background — read from the app layout root (bg-gray-50 / bg-gray-950)
+      const appRoot = document.querySelector('.flex.h-screen') as HTMLElement | null
+      ctx.fillStyle = appRoot ? getComputedStyle(appRoot).backgroundColor : '#f9fafb'
+      ctx.fillRect(0, 0, canvasW, canvasH)
+
+      // Draw title at top-left with padding
+      ctx.drawImage(titleImg, pad, pad)
+      // Draw chart below
+      ctx.drawImage(chartImg, pad, pad + titleImg.height + gap)
+
+      // Save to file via native dialog
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+      if (!blob) {
+        console.error('[ExportPNG] canvas.toBlob returned null')
+        return
+      }
+      const buf = new Uint8Array(await blob.arrayBuffer())
+      const fileName = `${graphTitle.replace(/[^a-zA-Z0-9 _-]/g, '')}.png`
+      await ipc.dialog.savePNG(fileName, buf)
     } catch (err) {
-      console.error('Export PNG failed:', err)
+      console.error('[ExportPNG] failed:', err)
     }
   }, [])
 
@@ -723,12 +835,12 @@ export function GraphTab(): JSX.Element {
     prevSeriesCountRef.current = activeSeries.length
   }, [activeSeries.length])
 
-  // Apply cumulative transform for display only — originalPoints in the store are never touched
-  const displaySeries = useMemo(() =>
-    chartMode === 'cumulative'
-      ? applyCumulativeReturns(activeSeries, cumMethod, cumBaseInput)
-      : activeSeries,
-  [activeSeries, chartMode, cumMethod, cumBaseInput])
+  // Apply mode transform for display only — originalPoints in the store are never touched
+  const displaySeries = useMemo(() => {
+    if (chartMode === 'cumulative') return applyCumulativeReturns(activeSeries, cumMethod, cumBaseInput)
+    if (chartMode === 'drawdown') return applyDrawdown(activeSeries)
+    return activeSeries
+  }, [activeSeries, chartMode, cumMethod, cumBaseInput])
 
   const visibleSeries = useMemo(() => displaySeries.filter(s => s.visible !== false), [displaySeries])
   const pivoted = useMemo(() => pivotSeries(visibleSeries), [visibleSeries])
@@ -779,6 +891,111 @@ export function GraphTab(): JSX.Element {
     }
     return m
   }, [displaySeries])
+
+  const handleExportCSV = useCallback(async () => {
+    setExportOpen(false)
+    const codes = visibleSeries.map(s => s.code)
+    const names = visibleSeries.map(s => s.name)
+    const header = ['Date', ...names].map(v => `"${v}"`).join(',')
+    const rows = pivoted.map(row => {
+      const date = (row.date as Date).toISOString().slice(0, 10)
+      const vals = codes.map(code => {
+        const v = row[code]
+        return typeof v === 'number' ? v.toString() : ''
+      })
+      return [date, ...vals].join(',')
+    })
+    const csv = [header, ...rows].join('\n')
+    const fileName = `${graphTitle.replace(/[^a-zA-Z0-9 _-]/g, '')}.csv`
+    await ipc.dialog.saveCSV(fileName, csv)
+  }, [visibleSeries, pivoted, graphTitle])
+
+  const buildSavedGraph = useCallback((): SavedGraph => ({
+    version: 1,
+    name: graphTitle,
+    savedAt: new Date().toISOString(),
+    session: {
+      series: activeSeries.map(serializeSeries),
+      zoomDomain: zoomDomain
+        ? { start: zoomDomain.start.toISOString().slice(0, 10), end: zoomDomain.end.toISOString().slice(0, 10) }
+        : null,
+      chartMode,
+      cumMethod,
+      cumBaseInput,
+      showGrid,
+      graphTitle,
+    },
+  }), [activeSeries, zoomDomain, chartMode, cumMethod, cumBaseInput, showGrid, graphTitle])
+
+  // ── Dirty tracking ─────────────────────────────────────────────────────────
+  // Derived comparison: compute a fingerprint of meaningful graph state
+  // (excluding colors — those are palette-dependent and get reassigned on tab
+  // switch by the recolor effect).  Compare against a snapshot taken at save time.
+  // No useEffect, no race conditions with mount/recolor cascades.
+  const graphStateKey = useMemo(() => {
+    const seriesKey = activeSeries.map(s => {
+      const maKey = (s.movingAverages ?? []).map(m =>
+        `${m.id}:${m.type}:${m.window}:${m.visible}:${m.lineStyle}:${m.lineWidth}`
+      ).join('|')
+      return `${s.id}:${s.visible}:${s.lineStyle}:${s.lineWidth}:${maKey}`
+    }).join(';')
+    const zoomKey = zoomDomain
+      ? `${zoomDomain.start.getTime()}-${zoomDomain.end.getTime()}`
+      : 'null'
+    return `${seriesKey}::${zoomKey}::${chartMode}::${cumMethod}::${cumBaseInput}::${showGrid}::${graphTitle}`
+  }, [activeSeries, zoomDomain, chartMode, cumMethod, cumBaseInput, showGrid, graphTitle])
+
+  // Snapshot of graphStateKey at the time of last save.  Initialised to current
+  // state when savedFilename exists (session was just restored — nothing changed yet).
+  const savedStateKeyRef = useRef<string | null>(savedFilename ? graphStateKey : null)
+
+  // Never saved + has data → show button.  Saved + state diverged → show button.
+  const isDirty = savedFilename
+    ? graphStateKey !== savedStateKeyRef.current
+    : activeSeries.length > 0
+
+  // Sync dirty flag to graph manager so the sidebar close button can check it
+  const setActiveGraphDirty = useGraphManagerStore(s => s.setActiveGraphDirty)
+  useEffect(() => { setActiveGraphDirty(isDirty) }, [isDirty, setActiveGraphDirty])
+
+  const [saveFlash, setSaveFlash] = useState(false)
+  const [saveMenuOpen, setSaveMenuOpen] = useState(false)
+  const saveMenuRef = useRef<HTMLDivElement>(null)
+
+  // Close save menu on outside click
+  useEffect(() => {
+    if (!saveMenuOpen) return
+    const h = (e: MouseEvent) => {
+      if (saveMenuRef.current && !saveMenuRef.current.contains(e.target as Node)) setSaveMenuOpen(false)
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [saveMenuOpen])
+
+  const doSave = useCallback(async (asNew: boolean) => {
+    setSaveMenuOpen(false)
+    const filename = await ipc.graph.save(buildSavedGraph(), asNew ? undefined : (savedFilename ?? undefined))
+    // Update the snapshot BEFORE setting savedFilename so the next render sees isDirty = false
+    savedStateKeyRef.current = graphStateKey
+    setSavedFilename(filename)
+    setSaveFlash(true)
+    setTimeout(() => setSaveFlash(false), 1500)
+  }, [buildSavedGraph, savedFilename, setSavedFilename, graphStateKey])
+
+  const handleSaveGraph = useCallback(async () => {
+    if (savedFilename) {
+      // Already saved before — show dropdown
+      setSaveMenuOpen(o => !o)
+    } else {
+      // First save — just save directly
+      await doSave(true)
+    }
+  }, [savedFilename, doSave])
+
+  const handleExportGraph = useCallback(async () => {
+    setExportOpen(false)
+    await ipc.graph.export(buildSavedGraph())
+  }, [buildSavedGraph])
 
   // Tooltip display order: series codes first (in legend order), then MAs
   const tooltipOrder = useMemo(() => {
@@ -1043,10 +1260,12 @@ export function GraphTab(): JSX.Element {
       if (!info) continue
       const raw = nearest[key]
       if (typeof raw !== 'number') continue
-      const suffix = chartMode === 'cumulative' ? '' : '%'
+      const isCum = chartMode === 'cumulative'
+      const suffix = isCum ? '' : '%'
+      const decimals = isCum ? 1 : 2
       const formatted = raw < 0
-        ? `(${Math.abs(raw).toFixed(chartMode === 'cumulative' ? 1 : 2)}${suffix})`
-        : `${raw.toFixed(chartMode === 'cumulative' ? 1 : 2)}${suffix}`
+        ? `(${Math.abs(raw).toFixed(decimals)}${suffix})`
+        : `${raw.toFixed(decimals)}${suffix}`
       lines.push(`"${info.name}"\t${formatted}`)
     }
     navigator.clipboard.writeText(lines.join('\n')).catch(() => {})
@@ -1066,19 +1285,78 @@ export function GraphTab(): JSX.Element {
     <div className="relative flex h-full w-full">
       <div className="flex flex-1 flex-col min-w-0 overflow-y-auto">
         {/* Graph title — editable inline, top-left aligned like Upload/Settings tabs */}
-        <div className="flex items-center gap-3 leading-none select-none text-foreground px-8 pt-8 shrink-0" style={WIN_FONT_STYLE}>
-          <LineChartIcon className="h-8 w-8 text-blue-500 shrink-0" />
-          <h2
-            ref={titleRef}
-            contentEditable
-            suppressContentEditableWarning
-            spellCheck={false}
-            onBlur={handleTitleBlur}
-            onKeyDown={handleTitleKeyDown}
-            className="text-4xl font-black leading-none outline-none cursor-text caret-blue-500"
-          >
-            {graphTitle}
-          </h2>
+        <div className="flex items-center justify-between px-8 pt-8 shrink-0">
+          <div ref={exportTitleRef} className="flex items-center gap-3 leading-none select-none text-foreground" style={WIN_FONT_STYLE}>
+            <LineChartIcon className="h-8 w-8 text-blue-500 shrink-0" />
+            <h2
+              ref={titleRef}
+              contentEditable
+              suppressContentEditableWarning
+              spellCheck={false}
+              onBlur={handleTitleBlur}
+              onKeyDown={handleTitleKeyDown}
+              className="text-4xl font-black leading-none outline-none cursor-text caret-blue-500"
+            >
+              {graphTitle}
+            </h2>
+          </div>
+          {/* Export dropdown */}
+          <div ref={exportRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setExportOpen(o => !o)}
+              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            >
+              Export
+              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-150', exportOpen && 'rotate-180')} />
+            </button>
+            <AnimatePresence>
+              {exportOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.12 }}
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[11rem] rounded-lg border border-border bg-popover shadow-md overflow-hidden"
+                >
+                  <button
+                    type="button"
+                    onClick={handleExportCSV}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm text-popover-foreground hover:bg-accent/60 transition-colors"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0" aria-hidden="true">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                    </svg>
+                    Export as CSV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportPNG}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm text-popover-foreground hover:bg-accent/60 transition-colors"
+                  >
+                    <ExportImageIcon className="h-4 w-4 shrink-0" />
+                    Export as PNG
+                  </button>
+                  <div className="mx-2 border-t border-border/40" />
+                  <button
+                    type="button"
+                    onClick={handleExportGraph}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm text-popover-foreground hover:bg-accent/60 transition-colors"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0" aria-hidden="true">
+                      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                      <polyline points="16 6 12 2 8 6" />
+                      <line x1="12" y1="2" x2="12" y2="15" />
+                    </svg>
+                    Export as Graph File
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
 
         {/* Chart viewport — flex-1 fills remaining space to center the chart;
@@ -1125,7 +1403,7 @@ export function GraphTab(): JSX.Element {
                     className={`text-left text-2xl font-black leading-tight select-none ${WIN_COLOR_CLASS} group`}
                     style={WIN_FONT_STYLE}
                   >
-                    {chartMode === 'cumulative' ? 'Cumulative Returns' : 'Returns'}
+                    {chartMode === 'cumulative' ? 'Cumulative Returns' : chartMode === 'drawdown' ? 'Drawdowns' : 'Returns'}
                     <ChevronDown
                       className={cn(
                         'inline-block ml-1 h-4 w-4 align-middle transition-transform duration-150 opacity-40 group-hover:opacity-80',
@@ -1143,7 +1421,11 @@ export function GraphTab(): JSX.Element {
                         transition={{ duration: 0.12 }}
                         className="absolute left-0 top-full mt-2 z-50 min-w-[13rem] rounded-lg border border-border bg-popover shadow-md overflow-hidden"
                       >
-                        {(['returns', 'cumulative'] as ChartMode[]).map(mode => (
+                        {([
+                          ['returns', 'Returns'],
+                          ['cumulative', 'Cumulative Returns'],
+                          ['drawdown', 'Drawdowns'],
+                        ] as [ChartMode, string][]).map(([mode, label]) => (
                           <button
                             key={mode}
                             type="button"
@@ -1155,7 +1437,7 @@ export function GraphTab(): JSX.Element {
                                 : 'text-popover-foreground hover:bg-accent/60',
                             )}
                           >
-                            {mode === 'returns' ? 'Returns' : 'Cumulative Returns'}
+                            {label}
                           </button>
                         ))}
                       </motion.div>
@@ -1230,6 +1512,8 @@ export function GraphTab(): JSX.Element {
                   onPanDelta={handlePanDelta}
                   onRightClickPoint={handleRightClickPoint}
                   freezeTooltip={rebaseMenu !== null}
+                  yPadTop={chartMode === 'drawdown' ? 0.25 : undefined}
+                  yClampMax={chartMode === 'drawdown' ? 0 : undefined}
                 >
                   {showGrid && <Grid origin={chartMode === 'cumulative' ? 100 : 0} />}
                   <XAxis />
@@ -1237,16 +1521,16 @@ export function GraphTab(): JSX.Element {
                   <Crosshair skipAnimation={isZooming} />
                   {showTooltip && <ChartTooltip
                     order={tooltipOrder}
+                    anchor={chartMode === 'drawdown' ? 'bottom' : 'top'}
                     rows={(dataKey, color, value) => {
                       const info = seriesInfoMap.get(dataKey)
                       if (!info) return null
                       const isMA = dataKey.startsWith('__ma__')
                       const fmtVal = (v: number | null) => {
                         if (v === null) return '\u2013'
-                        const absStr = chartMode === 'cumulative'
-                          ? Math.abs(v).toFixed(1)
-                          : Math.abs(v).toFixed(2)
-                        const suffix = chartMode === 'cumulative' ? '' : '%'
+                        const isCum = chartMode === 'cumulative'
+                        const absStr = Math.abs(v).toFixed(isCum ? 1 : 2)
+                        const suffix = isCum ? '' : '%'
                         return v < 0 ? `(${absStr}${suffix})` : `${absStr}${suffix}`
                       }
                       const dashArray =
@@ -1541,6 +1825,83 @@ export function GraphTab(): JSX.Element {
         </AnimatePresence>
       </div>
 
+      {/* Save button — bottom-right corner; hidden when clean (already saved, no changes) */}
+      <AnimatePresence>
+        {(isDirty || saveFlash) && (
+          <motion.div
+            ref={saveMenuRef}
+            className="absolute bottom-6 right-6 z-40"
+            variants={{
+              hidden: { opacity: 0, y: 10, scale: 0.9 },
+              visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.2 } },
+              exit: { opacity: 0, y: 6, transition: { duration: 0.4, ease: 'easeIn' } },
+            }}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+          >
+            <motion.button
+              type="button"
+              onClick={handleSaveGraph}
+              className={cn(
+                'flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg transition-colors',
+                saveFlash
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-primary text-primary-foreground hover:bg-primary/90',
+              )}
+              whileTap={{ scale: 0.95 }}
+            >
+              <AnimatePresence mode="wait" initial={false}>
+                {saveFlash ? (
+                  <motion.span key="check" initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.5 }} transition={{ duration: 0.15 }}>
+                    <Check className="h-4 w-4" />
+                  </motion.span>
+                ) : (
+                  <motion.span key="save" initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.5 }} transition={{ duration: 0.15 }}>
+                    <Save className="h-4 w-4" />
+                  </motion.span>
+                )}
+              </AnimatePresence>
+              {saveFlash ? 'Saved' : savedFilename ? 'Save...' : 'Save'}
+            </motion.button>
+            {/* Save/Save As dropdown — only when we have an existing file to overwrite */}
+            <AnimatePresence>
+              {saveMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  transition={{ duration: 0.12 }}
+                  className="absolute bottom-full right-0 mb-2 min-w-[10rem] rounded-lg border border-border bg-popover shadow-md overflow-hidden"
+                >
+                  <button
+                    type="button"
+                    onClick={() => doSave(false)}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm text-popover-foreground hover:bg-accent/60 transition-colors"
+                  >
+                    <Save className="h-4 w-4 shrink-0" />
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => doSave(true)}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm text-popover-foreground hover:bg-accent/60 transition-colors"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0" aria-hidden="true">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="12" y1="11" x2="12" y2="17" />
+                      <line x1="9" y1="14" x2="15" y2="14" />
+                    </svg>
+                    Save As New
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Right-click context menu — portaled to document.body.
            AnimatePresence lives INSIDE the portal so it can track the motion.div
            in the same DOM subtree (wrapping a createPortal from outside breaks
@@ -1575,18 +1936,20 @@ export function GraphTab(): JSX.Element {
                 >
                   Copy Values
                 </motion.button>
-                <motion.button
-                  type="button"
-                  onClick={() => confirmRebase(rebaseMenu.date)}
-                  variants={{ hidden: { opacity: 0, x: -20 }, visible: { opacity: 1, x: 0 } }}
-                  className={cn(
-                    'w-full px-4 py-2.5 text-left text-sm font-medium',
-                    'text-foreground hover:bg-slate-200 dark:hover:bg-zinc-800',
-                    'transition-colors',
-                  )}
-                >
-                  Re-base Index
-                </motion.button>
+                {chartMode === 'cumulative' && (
+                  <motion.button
+                    type="button"
+                    onClick={() => confirmRebase(rebaseMenu.date)}
+                    variants={{ hidden: { opacity: 0, x: -20 }, visible: { opacity: 1, x: 0 } }}
+                    className={cn(
+                      'w-full px-4 py-2.5 text-left text-sm font-medium',
+                      'text-foreground hover:bg-slate-200 dark:hover:bg-zinc-800',
+                      'transition-colors',
+                    )}
+                  >
+                    Re-base Index
+                  </motion.button>
+                )}
               </motion.div>
             </motion.div>
           )}

@@ -1,11 +1,12 @@
-import { ipcMain, dialog, app } from 'electron'
+import { ipcMain, dialog, app, BrowserWindow } from 'electron'
 import path from 'path'
+import fs from 'fs'
 import Database from 'better-sqlite3'
 import { initSchema } from '../db/schema'
 import { MemoryDB } from '../db/memory'
 import { ExternalDBReader, checkPathReachable } from '../db/external'
 import { IPC } from '../../shared/ipc-channels'
-import type { AppSettings, GraphSession, RawSeries } from '../../shared/types'
+import type { AppSettings, GraphSession, RawSeries, SavedGraph, SavedGraphMeta } from '../../shared/types'
 
 export function registerHandlers(): void {
   // Singleton internal memory DB. Initialised here (not at module import time)
@@ -108,11 +109,112 @@ export function registerHandlers(): void {
     saveSession(s)
   })
 
+  // ─── Saved graphs (.tsv-graph files) ──────────────────────────────────────
+  const graphsDir = path.join(app.getPath('userData'), 'graphs')
+  if (!fs.existsSync(graphsDir)) fs.mkdirSync(graphsDir, { recursive: true })
+
+  ipcMain.handle(IPC.GRAPH_SAVE, (_e, payload: SavedGraph, existingFilename?: string) => {
+    const filename = existingFilename ?? `${crypto.randomUUID()}.tsv-graph`
+    fs.writeFileSync(path.join(graphsDir, filename), JSON.stringify(payload), 'utf-8')
+    return filename
+  })
+
+  ipcMain.handle(IPC.GRAPH_LIST, (): SavedGraphMeta[] => {
+    const files = fs.readdirSync(graphsDir).filter(f => f.endsWith('.tsv-graph'))
+    const metas: SavedGraphMeta[] = []
+    for (const filename of files) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(graphsDir, filename), 'utf-8')) as SavedGraph
+        metas.push({
+          filename,
+          name: raw.name,
+          savedAt: raw.savedAt,
+          seriesCount: raw.session?.series?.length ?? 0,
+        })
+      } catch { /* skip corrupt files */ }
+    }
+    return metas.sort((a, b) => b.savedAt.localeCompare(a.savedAt))
+  })
+
+  ipcMain.handle(IPC.GRAPH_LOAD, (_e, filename: string): SavedGraph | null => {
+    const filePath = path.join(graphsDir, filename)
+    if (!fs.existsSync(filePath)) return null
+    try { return JSON.parse(fs.readFileSync(filePath, 'utf-8')) } catch { return null }
+  })
+
+  ipcMain.handle(IPC.GRAPH_DELETE, (_e, filename: string) => {
+    const filePath = path.join(graphsDir, filename)
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+  })
+
+  ipcMain.handle(IPC.GRAPH_IMPORT, async (): Promise<SavedGraph | null> => {
+    const result = await dialog.showOpenDialog({
+      filters: [{ name: 'TSV Graph', extensions: ['tsv-graph'] }],
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    try { return JSON.parse(fs.readFileSync(result.filePaths[0], 'utf-8')) } catch { return null }
+  })
+
+  ipcMain.handle(IPC.GRAPH_EXPORT, async (_e, payload: SavedGraph) => {
+    const safeName = payload.name.replace(/[^a-zA-Z0-9 _-]/g, '')
+    const result = await dialog.showSaveDialog({
+      defaultPath: `${safeName}.tsv-graph`,
+      filters: [{ name: 'TSV Graph', extensions: ['tsv-graph'] }],
+    })
+    if (result.canceled || !result.filePath) return false
+    fs.writeFileSync(result.filePath, JSON.stringify(payload), 'utf-8')
+    return true
+  })
+
+  ipcMain.handle(IPC.CAPTURE_RECT, async (_e, rect: { x: number; y: number; width: number; height: number }) => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) return null
+    const image = await win.webContents.capturePage({
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    })
+    return image.toPNG()
+  })
+
+  ipcMain.handle(IPC.DIALOG_SAVE_PNG, async (_e, defaultName: string, pngData: Buffer) => {
+    const result = await dialog.showSaveDialog({
+      defaultPath: defaultName,
+      filters: [{ name: 'PNG Image', extensions: ['png'] }],
+    })
+    if (result.canceled || !result.filePath) return false
+    fs.writeFileSync(result.filePath, Buffer.from(pngData))
+    return true
+  })
+
+  ipcMain.handle(IPC.DIALOG_SAVE_CSV, async (_e, defaultName: string, csvText: string) => {
+    const result = await dialog.showSaveDialog({
+      defaultPath: defaultName,
+      filters: [{ name: 'CSV File', extensions: ['csv'] }],
+    })
+    if (result.canceled || !result.filePath) return false
+    fs.writeFileSync(result.filePath, csvText, 'utf-8')
+    return true
+  })
+
   ipcMain.handle(IPC.DIALOG_OPEN_DB, async () => {
     const result = await dialog.showOpenDialog({
       filters: [{ name: 'Database', extensions: ['db'] }],
     })
     return result.canceled ? null : result.filePaths[0]
+  })
+
+  ipcMain.handle(IPC.DIALOG_CREATE_DB, async () => {
+    const result = await dialog.showSaveDialog({
+      defaultPath: 'New Database.db',
+      filters: [{ name: 'Database', extensions: ['db'] }],
+    })
+    if (result.canceled || !result.filePath) return null
+    const newDb = new Database(result.filePath)
+    initSchema(newDb)
+    newDb.close()
+    return result.filePath
   })
 
   ipcMain.handle(IPC.DIALOG_SAVE_DB, async (_e, filePath: string, seriesIds: string[]) => {

@@ -1,6 +1,6 @@
 "use client"
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Check, ChevronDown, Database, HardDrive, Plus, X } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, Database, FilePlus, FolderOpen, HardDrive, Plus, Save, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { createPortal } from 'react-dom'
 import { useDBStore } from '../../store/db'
@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTab, TabsPanel } from '../ui/tabs'
 import { SeriesList, MiniChart } from '../ui/series-list'
 import { DataTable } from '../ui/data-table'
 import { ipc } from '../../lib/ipc'
-import type { DBRecord, ExternalDB } from '../../../shared/types'
+import type { DBRecord, DataSeries, ExternalDB } from '../../../shared/types'
 
 type SelectedDB = 'memory' | string
 
@@ -77,6 +77,11 @@ const FONT_STYLE = {
   fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif",
 }
 
+function deriveDBName(filePath: string): string {
+  const basename = filePath.split(/[\\/]/).pop() ?? ''
+  return basename.replace(/\.db$/i, '') || 'external'
+}
+
 function dbLabel(selected: SelectedDB, externalDBs: ExternalDB[]): string {
   if (selected === 'memory') return 'Local Memory'
   return externalDBs.find((db) => db.id === selected)?.name ?? 'Select Database'
@@ -100,9 +105,11 @@ interface TitleDropdownProps {
   selected: SelectedDB
   onSelect: (id: SelectedDB) => void
   externalDBs: ExternalDB[]
+  onAddDB: () => void
+  onCreateDB: () => void
 }
 
-function TitleDropdown({ selected, onSelect, externalDBs }: TitleDropdownProps) {
+function TitleDropdown({ selected, onSelect, externalDBs, onAddDB, onCreateDB }: TitleDropdownProps) {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
 
@@ -207,6 +214,37 @@ function TitleDropdown({ selected, onSelect, externalDBs }: TitleDropdownProps) 
                   {selected === db.id && db.reachable && <Check className="h-3.5 w-3.5 shrink-0" />}
                 </motion.button>
               ))}
+
+              {/* ── Management actions ─────────────────────────────── */}
+              <div className="border-t-2 border-slate-200 dark:border-zinc-800" />
+
+              <motion.button
+                type="button"
+                onClick={() => { setOpen(false); onAddDB() }}
+                variants={{ hidden: { opacity: 0, x: -20 }, visible: { opacity: 1, x: 0 } }}
+                className={cn(
+                  'w-full flex items-center gap-2 px-4 py-2.5 text-sm text-left',
+                  'bg-slate-50 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800',
+                  'transition-colors duration-150',
+                )}
+              >
+                <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="flex-1">Add</span>
+              </motion.button>
+
+              <motion.button
+                type="button"
+                onClick={() => { setOpen(false); onCreateDB() }}
+                variants={{ hidden: { opacity: 0, x: -20 }, visible: { opacity: 1, x: 0 } }}
+                className={cn(
+                  'w-full flex items-center gap-2 px-4 py-2.5 text-sm text-left',
+                  'bg-slate-50 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800',
+                  'transition-colors duration-150',
+                )}
+              >
+                <FilePlus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="flex-1">Create database</span>
+              </motion.button>
             </motion.div>
           </motion.div>
         )}
@@ -247,19 +285,19 @@ function SeriesDropdown({ selected, onSelect, records }: SeriesDropdownProps) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 pb-1 select-none group"
+        className="flex items-start pb-1 select-none group"
         style={FONT_STYLE}
       >
-        <span className="text-sm font-semibold uppercase tracking-widest text-muted-foreground/50 group-hover:text-muted-foreground transition-colors">
+        <span className="text-sm font-semibold uppercase tracking-widest text-muted-foreground/50 group-hover:text-muted-foreground transition-colors text-left">
           {label}
+          <ChevronDown
+            className={cn(
+              'inline-block align-middle ml-0.5 h-3.5 w-3.5 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-[transform,color] duration-150',
+              open && 'rotate-180',
+            )}
+            strokeWidth={2.5}
+          />
         </span>
-        <ChevronDown
-          className={cn(
-            'h-3.5 w-3.5 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-[transform,color] duration-150',
-            open && 'rotate-180',
-          )}
-          strokeWidth={2.5}
-        />
       </button>
 
       <AnimatePresence>
@@ -338,9 +376,11 @@ const IMPORT_FREQ_STYLES: Record<string, string> = {
   unknown:   'bg-gray-100 text-gray-700 dark:bg-gray-700/60 dark:text-gray-300',
 }
 
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
 function fmtDate(iso: string): string {
-  const d = new Date(iso)
-  return `${d.getFullYear()} ${d.toLocaleDateString('en-GB', { month: 'short' })}`
+  const [y, m, d] = iso.split('-')
+  return `${y} ${MONTHS[parseInt(m, 10) - 1]} ${d}`
 }
 
 interface ImportSeriesModalProps {
@@ -744,24 +784,404 @@ function ImportSeriesModal({ destDbPath, onClose, onImported }: ImportSeriesModa
   )
 }
 
+// ─── Series metadata panel ───────────────────────────────────────────────────
+
+
+interface SeriesMetaPanelProps {
+  record: DBRecord
+  dbPath: string | null
+  dbId: string | null
+  onUpdated: (updated: DBRecord) => void
+}
+
+function SeriesMetaPanel({ record, dbPath, dbId, onUpdated }: SeriesMetaPanelProps) {
+  const [series, setSeries]           = useState<DataSeries | null>(null)
+  const [name, setName]               = useState(record.name)
+  const [code, setCode]               = useState(record.code)
+  const [description, setDescription] = useState(record.description)
+  const [saving, setSaving]           = useState(false)
+  const [saveStatus, setSaveStatus]   = useState<'idle' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError]     = useState<string | null>(null)
+
+  useEffect(() => {
+    setName(record.name)
+    setCode(record.code)
+    setDescription(record.description)
+    setSaveStatus('idle')
+    setSaveError(null)
+  }, [record.id])
+
+  useEffect(() => {
+    let cancelled = false
+    setSeries(null)
+    const fetcher = dbPath
+      ? ipc.external.getSeries(dbPath, record.id, dbId ?? record.id)
+      : ipc.memory.getSeries(record.id)
+    fetcher.then((s) => { if (!cancelled) setSeries(s) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [record.id, dbPath, dbId])
+
+  const freq     = series?.data_freq ?? inferFreqFromRecord(record.pointCount, record.startDate, record.endDate)
+  const freqStyle = IMPORT_FREQ_STYLES[freq ?? 'unknown']
+  const isDirty  = name !== record.name || code !== record.code || description !== record.description
+
+  function sanitizeCode(raw: string): string {
+    return raw.toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+  }
+
+  async function handleSave() {
+    if (!series || saving) return
+    setSaving(true)
+    setSaveError(null)
+    const n = name.trim(), c = code.trim(), d = description.trim()
+    try {
+      const updated: DataSeries = { ...series, name: n, code: c, description: d }
+      if (dbPath) await ipc.external.saveSeries(dbPath, updated)
+      else        await ipc.memory.saveSeries(updated)
+      onUpdated({ ...record, name: n, code: c, description: d })
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 2500)
+    } catch (e) {
+      setSaveStatus('error')
+      setSaveError(e instanceof Error ? e.message : 'Failed to save.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full py-1 pr-4">
+      <div className="flex-1 max-w-xl flex flex-col">
+
+        {/* ── Identity block ──────────────────────────────────────────── */}
+        <div className="pb-8 flex flex-col gap-4">
+
+          {/* Code chip — pill-shaped, monospace, editable inline */}
+          <input
+            type="text"
+            value={code}
+            spellCheck={false}
+            onChange={(e) => { setCode(sanitizeCode(e.target.value)); setSaveStatus('idle') }}
+            className={cn(
+              'w-fit font-mono text-[11px] tracking-widest uppercase',
+              'px-3 py-1 rounded-full',
+              'bg-muted/50 text-muted-foreground border border-border/60',
+              'hover:border-border hover:bg-muted/70',
+              'focus:outline-none focus:ring-2 focus:ring-ring focus:bg-muted/70',
+              'transition-colors duration-150 cursor-text',
+            )}
+          />
+
+          {/* Name — ghost heading, underline on hover/focus */}
+          <input
+            type="text"
+            value={name}
+            placeholder="Series name"
+            onChange={(e) => { setName(e.target.value); setSaveStatus('idle') }}
+            className={cn(
+              'w-full text-2xl font-bold text-foreground placeholder:text-muted-foreground/30',
+              'bg-transparent border-0 border-b-2 border-transparent',
+              'hover:border-border/40 focus:border-ring',
+              'focus:outline-none focus:ring-0 pb-1',
+              'transition-colors duration-150',
+            )}
+          />
+        </div>
+
+        <div className="border-t border-border/40" />
+
+        {/* ── Description ─────────────────────────────────────────────── */}
+        <div className="py-8 flex flex-col gap-3">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/40">
+            Description
+          </p>
+          <textarea
+            value={description}
+            placeholder="Add a description for this series…"
+            rows={6}
+            onChange={(e) => { setDescription(e.target.value); setSaveStatus('idle') }}
+            className={cn(
+              'w-full text-sm text-foreground leading-relaxed',
+              'bg-transparent border-0 resize-none',
+              'placeholder:text-muted-foreground/30',
+              'focus:outline-none focus:ring-0',
+            )}
+          />
+        </div>
+
+        <div className="border-t border-border/40" />
+
+        {/* ── Stats ───────────────────────────────────────────────────── */}
+        <div className="py-8 grid grid-cols-2 gap-x-12 gap-y-7">
+
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/40">
+              Frequency
+            </p>
+            {freq ? (
+              <span className={cn('w-fit px-2.5 py-0.5 text-xs font-semibold rounded-full', freqStyle)}>
+                {formatFreq(freq)}
+              </span>
+            ) : (
+              <p className="text-sm text-muted-foreground/50">—</p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/40">
+              Data points
+            </p>
+            <p className="text-sm font-semibold text-foreground tabular-nums">
+              {record.pointCount.toLocaleString()}
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/40">
+              Start date
+            </p>
+            <p className="text-sm font-medium text-foreground">{fmtDate(record.startDate)}</p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/40">
+              End date
+            </p>
+            <p className="text-sm font-medium text-foreground">{fmtDate(record.endDate)}</p>
+          </div>
+
+        </div>
+
+        <div className="border-t border-border/40" />
+
+        {/* ── Save ────────────────────────────────────────────────────── */}
+        <AnimatePresence>
+          {(isDirty || saveStatus !== 'idle') && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.15, ease: 'easeOut' }}
+              className="pt-6 flex items-center gap-4"
+            >
+              {isDirty && (
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving || !name.trim() || !code.trim()}
+                  className={cn(
+                    'flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors',
+                    'bg-blue-600 hover:bg-blue-700 text-white',
+                    (saving || !name.trim() || !code.trim()) && 'opacity-50 cursor-not-allowed',
+                  )}
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  {saving ? 'Saving…' : 'Save changes'}
+                </button>
+              )}
+              {saveStatus === 'saved' && !isDirty && (
+                <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                  Saved
+                </span>
+              )}
+              {saveStatus === 'error' && saveError && (
+                <span className="text-sm text-destructive">{saveError}</span>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+      </div>
+    </div>
+  )
+}
+
+// ─── Add DB Modal ─────────────────────────────────────────────────────────────
+
+interface AddDBModalProps {
+  onClose: () => void
+  onAdded: (id: string) => void
+}
+
+function AddDBModal({ onClose, onAdded }: AddDBModalProps) {
+  const addExternalDB = useDBStore((s) => s.addExternalDB)
+  const [pathInput, setPathInput] = useState('')
+  const [isDragging, setIsDragging] = useState(false)
+  const [status, setStatus] = useState<'idle' | 'checking' | 'error'>('idle')
+  const [errorMsg, setErrorMsg] = useState('')
+
+  async function handleBrowse() {
+    const p = await ipc.dialog.openDB()
+    if (p) { setPathInput(p); setStatus('idle'); setErrorMsg('') }
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (!file) return
+    // Electron exposes the full path on the File object
+    const p = (file as File & { path?: string }).path ?? file.name
+    setPathInput(p)
+    setStatus('idle')
+    setErrorMsg('')
+  }
+
+  async function handleAdd() {
+    const p = pathInput.trim()
+    if (!p) return
+    setStatus('checking')
+    setErrorMsg('')
+    try {
+      const reachable = await ipc.external.checkPath(p)
+      if (!reachable) {
+        setStatus('error')
+        setErrorMsg('File not found or is not a compatible database.')
+        return
+      }
+      const id = crypto.randomUUID()
+      addExternalDB({ id, name: deriveDBName(p), path: p, reachable: true })
+      onAdded(id)
+    } catch {
+      setStatus('error')
+      setErrorMsg('Could not open the database. Check the file path and try again.')
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-6" style={{ width: 'min(90vw, 480px)' }}>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <h2 className="text-3xl font-black leading-none text-foreground" style={FONT_STYLE}>
+          Add Database
+        </h2>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          className="mt-1 shrink-0 text-muted-foreground/50 hover:text-foreground transition-colors"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Drag-drop zone */}
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={cn(
+          'flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed py-10 transition-colors cursor-default',
+          isDragging
+            ? 'border-blue-400 bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400'
+            : 'border-border bg-muted/30 text-muted-foreground',
+        )}
+      >
+        <Database className={cn('h-8 w-8', isDragging ? 'text-blue-500' : 'text-muted-foreground/40')} />
+        <p className="text-sm">
+          {isDragging ? 'Drop to set path' : 'Drag & drop a .db file here'}
+        </p>
+      </div>
+
+      {/* Path input row */}
+      <div className="space-y-1.5">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+          File path
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={pathInput}
+            onChange={(e) => { setPathInput(e.target.value); setStatus('idle'); setErrorMsg('') }}
+            placeholder="/path/to/database.db"
+            className={cn(
+              'flex-1 h-9 px-3 text-sm rounded-md',
+              'border border-input bg-background text-foreground',
+              'placeholder:text-muted-foreground',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            )}
+          />
+          <button
+            type="button"
+            onClick={handleBrowse}
+            className="px-3 h-9 text-sm rounded-md border border-input bg-background hover:bg-muted/60 transition-colors whitespace-nowrap"
+          >
+            Browse…
+          </button>
+        </div>
+        {status === 'error' && (
+          <p className="text-xs text-destructive">{errorMsg}</p>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center justify-end gap-3 pt-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-4 py-2 text-sm rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={handleAdd}
+          disabled={!pathInput.trim() || status === 'checking'}
+          className={cn(
+            'px-4 py-2 text-sm font-medium rounded-md transition-colors',
+            'bg-blue-600 text-white hover:bg-blue-700',
+            (!pathInput.trim() || status === 'checking') && 'opacity-50 cursor-not-allowed',
+          )}
+        >
+          {status === 'checking' ? 'Checking…' : 'Add database'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── DBTab ────────────────────────────────────────────────────────────────────
 
 export function DBTab() {
-  const externalDBs = useDBStore((s) => s.externalDBs)
-  const [selectedDB, setSelectedDB]   = useState<SelectedDB>('memory')
-  const [records, setRecords]         = useState<DBRecord[]>([])
-  const [loading, setLoading]         = useState(false)
-  const [fetchError, setFetchError]   = useState<string | null>(null)
-  const [isImportOpen, setIsImportOpen] = useState(false)
+  const externalDBs    = useDBStore((s) => s.externalDBs)
+  const addExternalDB  = useDBStore((s) => s.addExternalDB)
+  const [selectedDB, setSelectedDB]         = useState<SelectedDB>('memory')
+  const [records, setRecords]               = useState<DBRecord[]>([])
+  const [loading, setLoading]               = useState(false)
+  const [fetchError, setFetchError]         = useState<string | null>(null)
+  const [isImportOpen, setIsImportOpen]     = useState(false)
+  const [isAddDBOpen, setIsAddDBOpen]       = useState(false)
   const [activeInnerTab, setActiveInnerTab] = useState('list-series')
   const [dataSeriesFilter, setDataSeriesFilter] = useState<string | 'all'>('all')
   const [refreshCounter, setRefreshCounter] = useState(0)
+
+  async function handleCreateDB() {
+    const p = await ipc.dialog.createDB()
+    if (!p) return
+    const id = crypto.randomUUID()
+    addExternalDB({ id, name: deriveDBName(p), path: p, reachable: true })
+    setSelectedDB(id)
+  }
 
   const extDB = selectedDB !== 'memory'
     ? (externalDBs.find((db) => db.id === selectedDB) ?? null)
     : null
   const dbPath = extDB?.path ?? null
   const dbId   = extDB?.id ?? null
+
+  const selectedRecord = dataSeriesFilter !== 'all'
+    ? (records.find((r) => r.id === dataSeriesFilter) ?? null)
+    : null
 
   // Fetch series list whenever the selected DB changes
   useEffect(() => {
@@ -803,6 +1223,8 @@ export function DBTab() {
         selected={selectedDB}
         onSelect={setSelectedDB}
         externalDBs={externalDBs}
+        onAddDB={() => setIsAddDBOpen(true)}
+        onCreateDB={handleCreateDB}
       />
 
       <Tabs value={activeInnerTab} onValueChange={setActiveInnerTab} className="flex flex-col gap-4 flex-1 min-h-0">
@@ -839,18 +1261,63 @@ export function DBTab() {
             dbId={dbId}
             onDelete={handleDelete}
             onImportSeries={() => setIsImportOpen(true)}
+            onRowClick={(id) => { setDataSeriesFilter(id); setActiveInnerTab('data') }}
           />
         </TabsPanel>
         <TabsPanel value="data" className="min-h-0 flex flex-col">
-          <DataTable
-            records={records}
-            dbPath={dbPath}
-            dbId={dbId}
-            filter={dataSeriesFilter}
-          />
+          <div className="flex flex-1 min-h-0">
+            {/* Data grid — constrained when metadata panel is open */}
+            <div className={cn(
+              'min-h-0 min-w-0 flex flex-col',
+              selectedRecord ? 'w-[38%] shrink-0' : 'flex-1',
+            )}>
+              <DataTable
+                records={records}
+                dbPath={dbPath}
+                dbId={dbId}
+                filter={dataSeriesFilter}
+              />
+            </div>
+
+            {/* Metadata panel — fills the rest of the space */}
+            {selectedRecord && (
+              <>
+                <div className="flex-1 min-w-0 min-h-0 overflow-y-auto">
+                  <SeriesMetaPanel
+                    key={selectedRecord.id}
+                    record={selectedRecord}
+                    dbPath={dbPath}
+                    dbId={dbId}
+                    onUpdated={(updated) =>
+                      setRecords((prev) => prev.map((r) => r.id === updated.id ? updated : r))
+                    }
+                  />
+                </div>
+              </>
+            )}
+          </div>
         </TabsPanel>
         <TabsPanel value="settings" />
       </Tabs>
+
+      {/* Add DB modal */}
+      {isAddDBOpen && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setIsAddDBOpen(false)}
+        >
+          <div
+            className="bg-background rounded-xl shadow-xl p-8"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <AddDBModal
+              onClose={() => setIsAddDBOpen(false)}
+              onAdded={(id) => { setIsAddDBOpen(false); setSelectedDB(id) }}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {/* Import Series modal */}
       {isImportOpen && createPortal(
