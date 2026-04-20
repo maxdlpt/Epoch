@@ -50,6 +50,7 @@ export interface LineConfig {
   dataKey: string
   stroke: string
   strokeWidth: number
+  yAxis?: 'left' | 'right'
 }
 
 export interface ChartSelection {
@@ -81,6 +82,8 @@ export interface ChartContextValue {
   data: Record<string, unknown>[]
   xScale: ScaleTime
   yScale: ScaleLinear
+  /** Secondary (right) Y-axis scale. Null when there is no right axis. */
+  yScaleRight: ScaleLinear | null
   width: number
   height: number
   innerWidth: number
@@ -122,6 +125,7 @@ function useChartInteraction({
   xAccessor,
   bisectDate,
   yScale,
+  yScaleRight,
   canInteract,
   onSelectionComplete,
   onPanDelta,
@@ -130,6 +134,7 @@ function useChartInteraction({
 }: {
   xScale: ScaleTime
   yScale: ScaleLinear
+  yScaleRight?: ScaleLinear | null
   data: Record<string, unknown>[]
   lines: LineConfig[]
   xAccessor: (d: Record<string, unknown>) => Date
@@ -183,11 +188,14 @@ function useChartInteraction({
       const yPositions: Record<string, number> = {}
       for (const line of lines) {
         const value = d[line.dataKey]
-        if (typeof value === 'number') yPositions[line.dataKey] = yScale(value) ?? 0
+        if (typeof value === 'number') {
+          const scale = (line.yAxis === 'right' && yScaleRight) ? yScaleRight : yScale
+          yPositions[line.dataKey] = scale(value) ?? 0
+        }
       }
       return { point: d, index: finalIndex, x: xScale(xAccessor(d)) ?? 0, yPositions }
     },
-    [xScale, yScale, data, lines, xAccessor, bisectDate],
+    [xScale, yScale, yScaleRight, data, lines, xAccessor, bisectDate],
   )
 
   const resolveIndexFromX = useCallback(
@@ -735,6 +743,60 @@ export function YAxis({ numTicks = 4, origin = 0, formatValue }: YAxisProps) {
 
 YAxis.displayName = 'YAxis'
 
+// ─── YAxisRight ───────────────────────────────────────────────────────────────
+
+export interface YAxisRightProps {
+  numTicks?: number
+  /**
+   * Y value that must always have a label — 0 for returns, 0 for drawdown.
+   * Must match the `origin` passed to the scale so it's always rendered.
+   */
+  origin?: number
+  formatValue?: (value: number) => string
+}
+
+export function YAxisRight({ numTicks = 4, origin = 0, formatValue }: YAxisRightProps) {
+  const { yScaleRight, margin, innerWidth, containerRef } = useChart()
+  const [container, setContainer] = useState<HTMLDivElement | null>(null)
+  useEffect(() => { setContainer(containerRef.current) }, [containerRef])
+
+  const ticks = useMemo(() => {
+    if (!yScaleRight) return []
+    const domain = yScaleRight.domain() as [number, number]
+    return originAlignedYTicks(domain, origin, numTicks).map((value) => {
+      const label = formatValue
+        ? formatValue(value)
+        : value >= 1_000_000
+          ? `${(value / 1_000_000).toFixed(1)}M`
+          : value >= 1_000
+            ? `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}k`
+            : value.toLocaleString()
+      return { value, y: (yScaleRight(value) ?? 0) + margin.top, label }
+    })
+  }, [yScaleRight, margin.top, numTicks, origin, formatValue])
+
+  if (!container || !yScaleRight) return null
+
+  return createPortal(
+    <div className="pointer-events-none absolute inset-0">
+      {ticks.map((tick) => (
+        <div
+          key={tick.value}
+          className="absolute flex justify-start"
+          style={{ left: margin.left + innerWidth + 8, top: tick.y, transform: 'translateY(-50%)' }}
+        >
+          <span className="whitespace-nowrap text-xs tabular-nums" style={{ color: 'var(--chart-label)' }}>
+            {tick.label}
+          </span>
+        </div>
+      ))}
+    </div>,
+    container,
+  )
+}
+
+YAxisRight.displayName = 'YAxisRight'
+
 // ─── Crosshair ────────────────────────────────────────────────────────────────
 
 // Internal scrolling date pill shown at the crosshair's x position.
@@ -1152,6 +1214,8 @@ export interface AreaProps {
   strokeDasharray?: string
   curve?: CurveFactory
   animate?: boolean
+  /** Which Y-axis this line should be plotted against. Defaults to 'left'. */
+  yAxis?: 'left' | 'right'
 }
 
 export function Area({
@@ -1163,11 +1227,13 @@ export function Area({
   strokeDasharray,
   curve = curveMonotoneX,
   animate = true,
+  yAxis = 'left',
 }: AreaProps) {
   const {
     data,
     xScale,
     yScale,
+    yScaleRight,
     innerHeight,
     innerWidth,
     isLoaded,
@@ -1175,6 +1241,8 @@ export function Area({
     xAccessor,
     selection,
   } = useChart()
+
+  const activeYScale = (yAxis === 'right' && yScaleRight) ? yScaleRight : yScale
 
   const rawId = useId()
   const idSuffix = rawId.replace(/:/g, '')
@@ -1193,9 +1261,9 @@ export function Area({
   const getY = useCallback(
     (d: Record<string, unknown>): number => {
       const v = d[dataKey]
-      return typeof v === 'number' ? (yScale(v) ?? 0) : innerHeight
+      return typeof v === 'number' ? (activeYScale(v) ?? 0) : innerHeight
     },
-    [dataKey, yScale, innerHeight],
+    [dataKey, activeYScale, innerHeight],
   )
 
   const isDefined = useCallback(
@@ -1250,7 +1318,7 @@ export function Area({
             fill={`url(#${gradientId})`}
             x={(d) => xScale(xAccessor(d)) ?? 0}
             y={getY}
-            yScale={yScale}
+            yScale={activeYScale}
           />
         )}
         <LinePath
@@ -1368,6 +1436,7 @@ function extractAreaConfigs(children: ReactNode): LineConfig[] {
       dataKey: props.dataKey,
       stroke: props.stroke ?? props.fill ?? 'var(--chart-line-primary)',
       strokeWidth: props.strokeWidth ?? 2,
+      yAxis: props.yAxis,
     })
   })
   return configs
@@ -1391,6 +1460,15 @@ interface ChartInnerProps {
   showTooltip: boolean
   yPadTop?: number
   yClampMax?: number
+  /** Explicit domain override for the left (primary) Y-axis. When provided, auto-computation from data is skipped. */
+  yDomainLeft?: [number, number]
+  /** Domain for the right (secondary) Y-axis. When provided, a second scale is created. */
+  yDomainRight?: [number, number]
+  /**
+   * Pixel fraction of innerHeight used for the right axis range.
+   * 1.0 (default) = full chart height; 0.3 = right axis occupies only the top 30%.
+   */
+  yRightPixelFraction?: number
 }
 
 function ChartInner({
@@ -1409,6 +1487,9 @@ function ChartInner({
   showTooltip,
   yPadTop,
   yClampMax,
+  yDomainLeft,
+  yDomainRight,
+  yRightPixelFraction = 1,
 }: ChartInnerProps) {
   const [isLoaded, setIsLoaded] = useState(false)
   const lines = useMemo(() => extractAreaConfigs(children), [children])
@@ -1442,9 +1523,16 @@ function ChartInner({
   )
 
   const yScale = useMemo(() => {
+    // When an explicit left domain is provided, skip auto-computation.
+    if (yDomainLeft) {
+      return scaleLinear({ range: [innerHeight, 0], domain: yDomainLeft, nice: false })
+    }
+    // Auto-compute from left-axis lines only (exclude right-axis lines so their
+    // data range doesn't inflate or compress the left scale).
+    const leftLines = lines.filter(l => l.yAxis !== 'right')
     let minValue = Infinity
     let maxValue = -Infinity
-    for (const line of lines) {
+    for (const line of leftLines) {
       for (const d of data) {
         const v = d[line.dataKey]
         if (typeof v === 'number') {
@@ -1467,7 +1555,14 @@ function ChartInner({
       domain: [minValue - span * 0.1, domainMax],
       nice: true,
     })
-  }, [innerHeight, data, lines, yPadTop, yClampMax])
+  }, [innerHeight, data, lines, yPadTop, yClampMax, yDomainLeft])
+
+  const yScaleRight = useMemo(() => {
+    if (!yDomainRight) return null
+    // The right axis pixel range: full height by default, or a top fraction for drawdown.
+    const pixelBottom = innerHeight * yRightPixelFraction
+    return scaleLinear({ range: [pixelBottom, 0], domain: yDomainRight, nice: false })
+  }, [innerHeight, yDomainRight, yRightPixelFraction])
 
   // "Jan 2000" format — used by the Crosshair DateTicker pill.
   // month+year is more informative than month+day for financial time-series.
@@ -1489,6 +1584,7 @@ function ChartInner({
     useChartInteraction({
       xScale,
       yScale,
+      yScaleRight,
       data,
       lines,
       xAccessor,
@@ -1506,6 +1602,7 @@ function ChartInner({
     data,
     xScale,
     yScale,
+    yScaleRight,
     width,
     height,
     innerWidth,
@@ -1584,6 +1681,15 @@ export interface AreaChartProps {
   yPadTop?: number
   /** Hard upper bound for the Y-axis domain (e.g. 0 for drawdown charts). */
   yClampMax?: number
+  /** Explicit domain override for the left (primary) Y-axis. */
+  yDomainLeft?: [number, number]
+  /** Domain for the right (secondary) Y-axis. When provided, a second scale and axis are available. */
+  yDomainRight?: [number, number]
+  /**
+   * Pixel fraction of chart height used for the right axis.
+   * 1.0 = full height (default); 0.3 = right axis occupies only the top 30%.
+   */
+  yRightPixelFraction?: number
 }
 
 export function AreaChart({
@@ -1601,6 +1707,9 @@ export function AreaChart({
   showTooltip = true,
   yPadTop,
   yClampMax,
+  yDomainLeft,
+  yDomainRight,
+  yRightPixelFraction,
 }: AreaChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const margin = { ...DEFAULT_MARGIN, ...marginProp }
@@ -1628,6 +1737,9 @@ export function AreaChart({
             xDataKey={xDataKey}
             yPadTop={yPadTop}
             yClampMax={yClampMax}
+            yDomainLeft={yDomainLeft}
+            yDomainRight={yDomainRight}
+            yRightPixelFraction={yRightPixelFraction}
           >
             {children}
           </ChartInner>

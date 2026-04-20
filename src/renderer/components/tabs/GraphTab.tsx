@@ -6,7 +6,7 @@ import { useGraphStore } from '../../store/graph'
 import { useAppStore } from '../../store/app'
 import { useGraphManagerStore } from '../../store/graph-manager'
 import { Button } from '../ui/button'
-import { AreaChart, Area, XAxis, YAxis, Grid, SegmentBackground, SegmentLineFrom, SegmentLineTo, Crosshair, ChartTooltip, OriginLine, BaseLine } from '../ui/area-chart'
+import { AreaChart, Area, XAxis, YAxis, YAxisRight, Grid, SegmentBackground, SegmentLineFrom, SegmentLineTo, Crosshair, ChartTooltip, OriginLine, BaseLine } from '../ui/area-chart'
 import { AddLinePanel } from '../graph/AddLinePanel'
 import { SeriesEditPanel } from '../graph/SeriesEditPanel'
 import { cn } from '../../lib/utils'
@@ -278,6 +278,51 @@ function pivotSeries(series: DataSeries[]): Record<string, unknown>[] {
     }
     return row
   })
+}
+
+// ─── Dual-axis helpers ────────────────────────────────────────────────────────
+
+/**
+ * Compute the natural padded [min, max] domain across all points and MA points
+ * in a set of series. Returns null when the series list is empty or has no data.
+ */
+function naturalDomain(series: DataSeries[], padFrac = 0.1): [number, number] | null {
+  let min = Infinity
+  let max = -Infinity
+  for (const s of series) {
+    for (const p of s.points) { if (p.value < min) min = p.value; if (p.value > max) max = p.value }
+    for (const ma of s.movingAverages ?? []) {
+      for (const p of ma.points) { if (p.value < min) min = p.value; if (p.value > max) max = p.value }
+    }
+  }
+  if (!isFinite(min)) return null
+  const span = max - min || Math.abs(max) || 100
+  return [min - span * padFrac, max + span * padFrac]
+}
+
+/**
+ * Expand two padded domains so that `leftOrigin` and `rightOrigin` map to the
+ * same pixel fraction.  This keeps e.g. index=100 and returns=0 on the same
+ * horizontal line regardless of how far each series has drifted.
+ *
+ * Algorithm: the ratio above/below the origin must be equal for both axes.
+ * We take r = max(lAbove/lBelow, rAbove/rBelow) then expand the "tight" side
+ * of each axis so that r is satisfied without shrinking any natural data range.
+ */
+function alignOriginDomains(
+  leftDomain: [number, number], leftOrigin: number,
+  rightDomain: [number, number], rightOrigin: number,
+): { left: [number, number]; right: [number, number] } {
+  const eps = 1e-10
+  const lAbove = leftDomain[1] - leftOrigin
+  const lBelow = leftOrigin - leftDomain[0]
+  const rAbove = rightDomain[1] - rightOrigin
+  const rBelow = rightOrigin - rightDomain[0]
+  const r = Math.max(lAbove / Math.max(lBelow, eps), rAbove / Math.max(rBelow, eps))
+  return {
+    left: [leftOrigin - Math.max(lBelow, lAbove / Math.max(r, eps)), leftOrigin + Math.max(lAbove, r * lBelow)],
+    right: [rightOrigin - Math.max(rBelow, rAbove / Math.max(r, eps)), rightOrigin + Math.max(rAbove, r * rBelow)],
+  }
 }
 
 // ─── BaseDatePicker helpers ────────────────────────────────────────────────────
@@ -862,12 +907,33 @@ export function GraphTab(): JSX.Element {
   const hasDrawdown = activeSeries.some(s => (s.transform ?? 'returns') === 'drawdown')
   const hasReturns = activeSeries.some(s => (s.transform ?? 'returns') === 'returns')
 
-  // Mixed transforms means we can't show a single origin line or clamp
+  // ── Axis assignment ──────────────────────────────────────────────────────────
+  // Rules: index always left, drawdown always right when not alone,
+  //        returns goes right when index is present, left otherwise.
+  const leftAxisMode: 'index' | 'returns' | 'drawdown' =
+    hasCumulative ? 'index' : hasReturns ? 'returns' : 'drawdown'
+
+  const rightAxisMode: 'returns' | 'drawdown' | null =
+    hasCumulative && hasReturns ? 'returns' :
+    (hasCumulative || hasReturns) && hasDrawdown ? 'drawdown' :
+    null
+
+  const hasRightAxis = rightAxisMode !== null
+
+  // When drawdown is the right axis, it only occupies the top 30% of the chart
+  const drawdownIsRight = rightAxisMode === 'drawdown'
+  const yRightPixelFraction = drawdownIsRight ? 0.3 : 1
+
+  // isMixed: true when more than one transform type is present (used for badge display)
   const isMixed = [hasCumulative, hasDrawdown, hasReturns].filter(Boolean).length > 1
-  // If all series share a single transform, use that for chart-wide settings
-  const uniformMode = !isMixed
-    ? (hasCumulative ? 'cumulative' : hasDrawdown ? 'drawdown' : 'returns')
-    : 'returns'
+
+  // ── Per-series axis assignment ───────────────────────────────────────────────
+  const seriesAxisSide = useCallback((t: string): 'left' | 'right' => {
+    if (t === 'cumulative') return 'left'
+    if (t === 'drawdown') return (hasCumulative || hasReturns) ? 'right' : 'left'
+    // returns
+    return hasCumulative ? 'right' : 'left'
+  }, [hasCumulative, hasReturns])
 
   // Resolved base date — only meaningful when we have cumulative series
   const resolvedBaseDate = useMemo(() => {
@@ -877,6 +943,38 @@ export function GraphTab(): JSX.Element {
     const baseInput = cumSeries[0].cumBaseInput ?? ''
     return resolveBaseDate(cumSeries, baseInput)
   }, [activeSeries])
+
+  // ── Y-axis domain computation ────────────────────────────────────────────────
+  const { yDomainLeft, yDomainRight } = useMemo(() => {
+    const leftSeries = displaySeries.filter(s => seriesAxisSide(s.transform ?? 'returns') === 'left')
+    const rightSeries = displaySeries.filter(s => seriesAxisSide(s.transform ?? 'returns') === 'right')
+
+    const leftNat = naturalDomain(leftSeries)
+    const rightNat = rightSeries.length > 0 ? naturalDomain(rightSeries) : null
+
+    if (!leftNat) return { yDomainLeft: undefined, yDomainRight: undefined }
+
+    if (leftAxisMode === 'drawdown') {
+      // Drawdown-only: clamp max to 0, extra top padding for the 0% label
+      const span = Math.abs(leftNat[0] - leftNat[1]) || 100
+      return { yDomainLeft: [leftNat[0] - span * 0.15, 0] as [number, number], yDomainRight: undefined }
+    }
+
+    if (rightAxisMode === 'returns' && rightNat) {
+      // Index (left) + Returns (right): align their origins so index=100 and returns=0 share a pixel
+      const { left, right } = alignOriginDomains(leftNat, 100, rightNat, 0)
+      return { yDomainLeft: left, yDomainRight: right }
+    }
+
+    if (rightAxisMode === 'drawdown' && rightNat) {
+      // Index/Returns (left) + Drawdown (right, top 30%)
+      const ddSpan = Math.abs(rightNat[0]) || 100
+      const ddDomain: [number, number] = [rightNat[0] - ddSpan * 0.1, 0]
+      return { yDomainLeft: leftNat, yDomainRight: ddDomain }
+    }
+
+    return { yDomainLeft: leftNat, yDomainRight: undefined }
+  }, [displaySeries, leftAxisMode, rightAxisMode, seriesAxisSide])
 
   // Build a lookup from data-key (series code or __ma__<id>) to display info
   // so the ChartTooltip rows callback can resolve names, colours, and styles.
@@ -1278,9 +1376,11 @@ export function GraphTab(): JSX.Element {
   const confirmRebase = useCallback(
     (date: Date): void => {
       const baseStr = isoDate(date.getFullYear(), date.getMonth() + 1, date.getDate())
-      // Set ALL series to cumulative with this base date
+      // Only update cumBaseInput on series already in cumulative mode
       for (const s of activeSeries) {
-        updateSeries(s.id, { transform: 'cumulative', cumBaseInput: baseStr })
+        if ((s.transform ?? 'returns') === 'cumulative') {
+          updateSeries(s.id, { cumBaseInput: baseStr })
+        }
       }
       setRebaseMenu(null)
     },
@@ -1430,16 +1530,24 @@ export function GraphTab(): JSX.Element {
                   onPanDelta={handlePanDelta}
                   onRightClickPoint={handleRightClickPoint}
                   freezeTooltip={rebaseMenu !== null}
-                  yPadTop={uniformMode === 'drawdown' ? 0.25 : undefined}
-                  yClampMax={uniformMode === 'drawdown' ? 0 : undefined}
+                  margin={{ right: hasRightAxis ? 56 : 24 }}
+                  yDomainLeft={yDomainLeft}
+                  yDomainRight={yDomainRight}
+                  yRightPixelFraction={yRightPixelFraction}
                 >
-                  {showGrid && <Grid origin={uniformMode === 'cumulative' ? 100 : 0} />}
+                  {showGrid && <Grid origin={leftAxisMode === 'index' ? 100 : 0} />}
                   <XAxis />
-                  <YAxis origin={uniformMode === 'cumulative' ? 100 : 0} />
+                  <YAxis
+                    origin={leftAxisMode === 'index' ? 100 : 0}
+                    formatValue={leftAxisMode !== 'index' ? (v) => `${v.toFixed(1)}%` : undefined}
+                  />
+                  {hasRightAxis && (
+                    <YAxisRight origin={0} formatValue={(v) => `${v.toFixed(1)}%`} />
+                  )}
                   <Crosshair skipAnimation={isZooming} />
                   {showTooltip && <ChartTooltip
                     order={tooltipOrder}
-                    anchor={uniformMode === 'drawdown' ? 'bottom' : 'top'}
+                    anchor={leftAxisMode === 'drawdown' && !hasRightAxis ? 'bottom' : 'top'}
                     rows={(dataKey, color, value) => {
                       const info = seriesInfoMap.get(dataKey)
                       if (!info) return null
@@ -1448,7 +1556,8 @@ export function GraphTab(): JSX.Element {
                         if (v === null) return '\u2013'
                         // Determine transform from the series this key belongs to
                         const parentSeries = activeSeries.find(s => s.code === dataKey || (s.movingAverages ?? []).some(m => `__ma__${m.id}` === dataKey))
-                        const isCum = (parentSeries?.transform ?? 'returns') === 'cumulative'
+                        const transform = parentSeries?.transform ?? 'returns'
+                        const isCum = transform === 'cumulative'
                         const absStr = Math.abs(v).toFixed(isCum ? 1 : 2)
                         const suffix = isCum ? '' : '%'
                         return v < 0 ? `(${absStr}${suffix})` : `${absStr}${suffix}`
@@ -1473,8 +1582,8 @@ export function GraphTab(): JSX.Element {
                       )
                     }}
                   />}
-                  {/* Origin line — horizontal at 100 (cumulative) or 0 (returns) */}
-                  <OriginLine value={uniformMode === 'cumulative' ? 100 : 0} />
+                  {/* Origin line — on the left axis (index=100, returns/drawdown=0) */}
+                  <OriginLine value={leftAxisMode === 'index' ? 100 : 0} />
                   {/* Base line — vertical at the resolved base date (when any series is cumulative) */}
                   {hasCumulative && <BaseLine date={resolvedBaseDate} />}
                   {/* Drag-select highlight — renders inside the SVG at selection time */}
@@ -1494,9 +1603,10 @@ export function GraphTab(): JSX.Element {
                         s.lineStyle === 'dotted' ? '2 3' :
                         undefined
                       }
+                      yAxis={seriesAxisSide(s.transform ?? 'returns')}
                     />
                   ))}
-                  {/* MA overlay lines — rendered above parent series */}
+                  {/* MA overlay lines — rendered above parent series, same axis as parent */}
                   {visibleSeries.flatMap(s =>
                     (s.movingAverages ?? [])
                       .filter(ma => ma.visible !== false)
@@ -1512,6 +1622,7 @@ export function GraphTab(): JSX.Element {
                             (ma.lineStyle ?? 'dotted') === 'dotted' ? '2 3' :
                             undefined
                           }
+                          yAxis={seriesAxisSide(s.transform ?? 'returns')}
                         />
                       ))
                   )}
@@ -1582,10 +1693,18 @@ export function GraphTab(): JSX.Element {
                           />
                         </svg>
                         <span className="text-foreground font-medium">{s.name}</span>
-                        {/* Transform badge */}
-                        {(s.transform ?? 'returns') !== 'returns' && (
+                        {/* Transform badge — shown whenever any mix of transforms is present */}
+                        {isMixed && (
                           <span className="px-1 py-0.5 rounded text-[10px] font-semibold leading-none bg-muted text-muted-foreground">
-                            {(s.transform ?? 'returns') === 'cumulative' ? 'CUM' : 'DD'}
+                            {(s.transform ?? 'returns') === 'cumulative' ? 'INDEX' :
+                             (s.transform ?? 'returns') === 'drawdown' ? 'DD' :
+                             'RETURN'}
+                          </span>
+                        )}
+                        {/* In uniform-mode (all same transform) show badge only for non-default transforms */}
+                        {!isMixed && (s.transform ?? 'returns') !== 'returns' && (
+                          <span className="px-1 py-0.5 rounded text-[10px] font-semibold leading-none bg-muted text-muted-foreground">
+                            {(s.transform ?? 'returns') === 'cumulative' ? 'INDEX' : 'DD'}
                           </span>
                         )}
                         {/* Visibility toggle */}
@@ -1862,18 +1981,20 @@ export function GraphTab(): JSX.Element {
                 >
                   Copy Values
                 </motion.button>
-                <motion.button
-                  type="button"
-                  onClick={() => confirmRebase(rebaseMenu.date)}
-                  variants={{ hidden: { opacity: 0, x: -20 }, visible: { opacity: 1, x: 0 } }}
-                  className={cn(
-                    'w-full px-4 py-2.5 text-left text-sm font-medium',
-                    'text-foreground hover:bg-slate-200 dark:hover:bg-zinc-800',
-                    'transition-colors',
-                  )}
-                >
-                  Re-base Index
-                </motion.button>
+                {hasCumulative && (
+                  <motion.button
+                    type="button"
+                    onClick={() => confirmRebase(rebaseMenu.date)}
+                    variants={{ hidden: { opacity: 0, x: -20 }, visible: { opacity: 1, x: 0 } }}
+                    className={cn(
+                      'w-full px-4 py-2.5 text-left text-sm font-medium',
+                      'text-foreground hover:bg-slate-200 dark:hover:bg-zinc-800',
+                      'transition-colors',
+                    )}
+                  >
+                    Re-base Index
+                  </motion.button>
+                )}
               </motion.div>
             </motion.div>
           )}
