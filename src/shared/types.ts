@@ -8,6 +8,9 @@ export type DataFreq = 'daily' | 'monthly' | 'quarterly' | 'yearly'
 /** Per-series transform — determines how originalPoints are mapped to display points. */
 export type SeriesTransform = 'returns' | 'cumulative' | 'drawdown'
 
+/** Data type classification: 'growth' for returns/indices; 'level' for prices/values (stored as growth rates). */
+export type DataType = 'level' | 'growth'
+
 /** Method for cumulative return calculation (only relevant when transform === 'cumulative'). */
 export type CumMethod = 'geometric' | 'arithmetic'
 
@@ -47,6 +50,8 @@ export interface DataSeries {
   transform?: SeriesTransform    // per-series display transform; defaults to 'returns' (raw)
   cumMethod?: CumMethod          // only when transform === 'cumulative'; defaults to 'geometric'
   cumBaseInput?: string           // only when transform === 'cumulative'; '' = first date
+  dataType?: DataType       // undefined treated as 'growth' for backward compat
+  startingValue?: number    // only meaningful when dataType === 'level'
 }
 
 /**
@@ -60,6 +65,8 @@ export interface RawSeries {
   code: string
   description: string
   points: { date: string; value: number }[]
+  dataType?: DataType
+  startingValue?: number
 }
 
 export interface DBRecord {
@@ -70,6 +77,7 @@ export interface DBRecord {
   startDate: string   // ISO string
   endDate: string     // ISO string
   pointCount: number
+  dataType?: DataType   // populated by listSeries(); undefined for legacy rows
 }
 
 export interface ExternalDB {
@@ -125,6 +133,8 @@ export interface SessionSeries {
   transform?: SeriesTransform
   cumMethod?: CumMethod
   cumBaseInput?: string
+  dataType?: DataType
+  startingValue?: number
   points: { date: string; value: number }[]
   originalPoints: { date: string; value: number }[]
 }

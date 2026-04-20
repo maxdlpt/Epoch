@@ -4,6 +4,7 @@ export enum IPC {
   MEMORY_GET_SERIES       = 'memory:get-series',
   MEMORY_SAVE_SERIES      = 'memory:save-series',
   MEMORY_DELETE_SERIES    = 'memory:delete-series',
+  MEMORY_UPDATE_SERIES_META = 'memory:update-series-meta',
 
   // External DB read
   EXTERNAL_LIST_SERIES    = 'external:list-series',
@@ -13,6 +14,7 @@ export enum IPC {
   // External DB write
   EXTERNAL_SAVE_SERIES    = 'external:save-series',
   EXTERNAL_DELETE_SERIES  = 'external:delete-series',
+  EXTERNAL_UPDATE_SERIES_META = 'external:update-series-meta',
 
   // Settings
   SETTINGS_GET            = 'settings:get',
