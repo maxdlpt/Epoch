@@ -23,4 +23,15 @@ export function initSchema(db: Database.Database): void {
       value TEXT NOT NULL
     );
   `)
+
+  // Idempotent column additions — swallow "duplicate column name" errors on re-run.
+  const addColumn = (sql: string) => {
+    try {
+      db.exec(sql)
+    } catch {
+      /* column already exists */
+    }
+  }
+  addColumn(`ALTER TABLE series ADD COLUMN data_type     TEXT NOT NULL DEFAULT 'growth'`)
+  addColumn(`ALTER TABLE series ADD COLUMN starting_value REAL`)
 }
