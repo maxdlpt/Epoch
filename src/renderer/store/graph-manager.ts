@@ -16,9 +16,6 @@ function snapshotFromStore(): GraphSession {
     zoomDomain: s.zoomDomain
       ? { start: s.zoomDomain.start.toISOString().slice(0, 10), end: s.zoomDomain.end.toISOString().slice(0, 10) }
       : null,
-    chartMode: s.chartMode,
-    cumMethod: s.cumMethod,
-    cumBaseInput: s.cumBaseInput,
     showGrid: s.showGrid,
     graphTitle: s.graphTitle,
     savedFilename: s.savedFilename ?? undefined,
@@ -36,9 +33,23 @@ function loadSnapshotToStore(session: GraphSession) {
       end: new Date(session.zoomDomain.end),
     })
   }
-  if (session.chartMode) g.setChartMode(session.chartMode)
-  if (session.cumMethod) g.setCumMethod(session.cumMethod)
-  if (session.cumBaseInput) g.setCumBaseInput(session.cumBaseInput)
+  // Legacy migration: if session has chart-level chartMode but series don't have
+  // per-series transforms, apply the chart-level mode to all series.
+  if (session.chartMode && session.chartMode !== 'returns') {
+    const transform = session.chartMode as 'cumulative' | 'drawdown'
+    for (const s of session.series) {
+      if (!s.transform) {
+        const ds = useGraphStore.getState().activeSeries.find(x => x.id === s.id)
+        if (ds) {
+          g.updateSeries(ds.id, {
+            transform,
+            cumMethod: session.cumMethod ?? 'geometric',
+            cumBaseInput: session.cumBaseInput ?? '',
+          })
+        }
+      }
+    }
+  }
   if (session.showGrid !== undefined) g.setShowGrid(session.showGrid)
   if (session.graphTitle) g.setGraphTitle(session.graphTitle)
   g.setSavedFilename(session.savedFilename ?? null)

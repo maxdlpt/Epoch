@@ -1,21 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion, useMotionValue } from 'motion/react'
-import { Check, ChevronDown, Eye, EyeOff, Plus, RotateCcw, Save, X } from 'lucide-react'
+import { Check, ChevronDown, Eye, EyeOff, Plus, Save, X } from 'lucide-react'
 import { useGraphStore } from '../../store/graph'
 import { useAppStore } from '../../store/app'
 import { useGraphManagerStore } from '../../store/graph-manager'
 import { Button } from '../ui/button'
-import { AreaChart, Area, XAxis, YAxis, Grid, SegmentBackground, SegmentLineFrom, SegmentLineTo, Crosshair, ChartTooltip, OriginLine, BaseLine } from '../ui/area-chart'
+import { AreaChart, Area, XAxis, YAxis, YAxisRight, Grid, SegmentBackground, SegmentLineFrom, SegmentLineTo, Crosshair, ChartTooltip, OriginLine, BaseLine } from '../ui/area-chart'
 import { AddLinePanel } from '../graph/AddLinePanel'
 import { SeriesEditPanel } from '../graph/SeriesEditPanel'
 import { cn } from '../../lib/utils'
 import { ipc, serializeSeries } from '../../lib/ipc'
-import { Selector } from '../ui/segment-group'
 import { computeMA } from '../../lib/ma'
-import type { ChartMode, CumMethod } from '../../store/graph'
-import { detectFrequency } from '../../lib/freq'
-import type { DataFreq, DataSeries, DataPoint, SavedGraph } from '../../../shared/types'
+import type { DataFreq, DataSeries, DataPoint, SavedGraph, CumMethod } from '../../../shared/types'
 
 function ExportImageIcon({ className }: { className?: string }) {
   return (
@@ -281,6 +278,51 @@ function pivotSeries(series: DataSeries[]): Record<string, unknown>[] {
     }
     return row
   })
+}
+
+// ─── Dual-axis helpers ────────────────────────────────────────────────────────
+
+/**
+ * Compute the natural padded [min, max] domain across all points and MA points
+ * in a set of series. Returns null when the series list is empty or has no data.
+ */
+function naturalDomain(series: DataSeries[], padFrac = 0.1): [number, number] | null {
+  let min = Infinity
+  let max = -Infinity
+  for (const s of series) {
+    for (const p of s.points) { if (p.value < min) min = p.value; if (p.value > max) max = p.value }
+    for (const ma of s.movingAverages ?? []) {
+      for (const p of ma.points) { if (p.value < min) min = p.value; if (p.value > max) max = p.value }
+    }
+  }
+  if (!isFinite(min)) return null
+  const span = max - min || Math.abs(max) || 100
+  return [min - span * padFrac, max + span * padFrac]
+}
+
+/**
+ * Expand two padded domains so that `leftOrigin` and `rightOrigin` map to the
+ * same pixel fraction.  This keeps e.g. index=100 and returns=0 on the same
+ * horizontal line regardless of how far each series has drifted.
+ *
+ * Algorithm: the ratio above/below the origin must be equal for both axes.
+ * We take r = max(lAbove/lBelow, rAbove/rBelow) then expand the "tight" side
+ * of each axis so that r is satisfied without shrinking any natural data range.
+ */
+function alignOriginDomains(
+  leftDomain: [number, number], leftOrigin: number,
+  rightDomain: [number, number], rightOrigin: number,
+): { left: [number, number]; right: [number, number] } {
+  const eps = 1e-10
+  const lAbove = leftDomain[1] - leftOrigin
+  const lBelow = leftOrigin - leftDomain[0]
+  const rAbove = rightDomain[1] - rightOrigin
+  const rBelow = rightOrigin - rightDomain[0]
+  const r = Math.max(lAbove / Math.max(lBelow, eps), rAbove / Math.max(rBelow, eps))
+  return {
+    left: [leftOrigin - Math.max(lBelow, lAbove / Math.max(r, eps)), leftOrigin + Math.max(lAbove, r * lBelow)],
+    right: [rightOrigin - Math.max(rBelow, rAbove / Math.max(r, eps)), rightOrigin + Math.max(rAbove, r * rBelow)],
+  }
 }
 
 // ─── BaseDatePicker helpers ────────────────────────────────────────────────────
@@ -587,7 +629,7 @@ function resolveBaseDate(series: DataSeries[], baseInput: string): Date | null {
 }
 
 export function GraphTab(): JSX.Element {
-  const { activeSeries, removeSeries, reorderSeries, toggleSeriesVisibility, updateSeries, rightPanel, setRightPanel, zoomDomain, setZoomDomain, chartMode, setChartMode, cumMethod, setCumMethod, cumBaseInput, setCumBaseInput, showGrid, setShowGrid, graphTitle, setGraphTitle, savedFilename, setSavedFilename } = useGraphStore()
+  const { activeSeries, removeSeries, reorderSeries, toggleSeriesVisibility, updateSeries, rightPanel, setRightPanel, zoomDomain, setZoomDomain, showGrid, setShowGrid, graphTitle, setGraphTitle, savedFilename, setSavedFilename } = useGraphStore()
   const activeTab        = useAppStore((s) => s.activeTab)
   const chartMaxWidth    = useAppStore((s) => s.chartMaxWidth)
   const setChartMaxWidth = useAppStore((s) => s.setChartMaxWidth)
@@ -724,22 +766,6 @@ export function GraphTab(): JSX.Element {
     return () => document.removeEventListener('keydown', handler)
   }, [showGrid, setShowGrid])
 
-  // ── Chart mode ───────────────────────────────────────────────────────────────
-  const [titleMenuOpen, setTitleMenuOpen] = useState(false)
-  const titleMenuRef = useRef<HTMLDivElement>(null)
-
-  // Close title menu on outside click
-  useEffect(() => {
-    if (!titleMenuOpen) return
-    const handler = (e: MouseEvent) => {
-      if (titleMenuRef.current && !titleMenuRef.current.contains(e.target as Node)) {
-        setTitleMenuOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [titleMenuOpen])
-
   // ── Chart width (Ctrl+scroll to resize) ──────────────────────────────────────
   const chartMaxWidthRef                       = useRef(chartMaxWidth)
   chartMaxWidthRef.current                     = chartMaxWidth   // always current for event handlers
@@ -835,44 +861,120 @@ export function GraphTab(): JSX.Element {
     prevSeriesCountRef.current = activeSeries.length
   }, [activeSeries.length])
 
-  // Apply mode transform for display only — originalPoints in the store are never touched
+  // Per-series transform pipeline: group series by transform type, apply each
+  // group's intersection-date semantics independently, then merge back.
   const displaySeries = useMemo(() => {
-    if (chartMode === 'cumulative') return applyCumulativeReturns(activeSeries, cumMethod, cumBaseInput)
-    if (chartMode === 'drawdown') return applyDrawdown(activeSeries)
-    return activeSeries
-  }, [activeSeries, chartMode, cumMethod, cumBaseInput])
+    if (activeSeries.length === 0) return activeSeries
+
+    // Group by transform type
+    const raw: DataSeries[] = []
+    const cumGroups = new Map<string, DataSeries[]>()  // key = cumMethod:cumBaseInput
+    const ddSeries: DataSeries[] = []
+
+    for (const s of activeSeries) {
+      const t = s.transform ?? 'returns'
+      if (t === 'returns') raw.push(s)
+      else if (t === 'drawdown') ddSeries.push(s)
+      else {
+        const key = `${s.cumMethod ?? 'geometric'}:${s.cumBaseInput ?? ''}`
+        const group = cumGroups.get(key) ?? []
+        group.push(s)
+        cumGroups.set(key, group)
+      }
+    }
+
+    // Apply cumulative returns per group (independent intersection dates)
+    const cumResults: DataSeries[] = []
+    for (const [key, group] of cumGroups) {
+      const [method, baseInput] = key.split(':') as [CumMethod, string]
+      cumResults.push(...applyCumulativeReturns(group, method, baseInput))
+    }
+
+    // Apply drawdown (independent intersection dates within dd group)
+    const ddResults = ddSeries.length > 0 ? applyDrawdown(ddSeries) : []
+
+    // Merge back in original order
+    const resultMap = new Map<string, DataSeries>()
+    for (const s of [...raw, ...cumResults, ...ddResults]) resultMap.set(s.id, s)
+    return activeSeries.map(s => resultMap.get(s.id) ?? s)
+  }, [activeSeries])
 
   const visibleSeries = useMemo(() => displaySeries.filter(s => s.visible !== false), [displaySeries])
   const pivoted = useMemo(() => pivotSeries(visibleSeries), [visibleSeries])
 
-  // Resolved base date for the cumulative-mode base-line
-  const resolvedBaseDate = useMemo(() =>
-    chartMode === 'cumulative' ? resolveBaseDate(activeSeries, cumBaseInput) : null,
-  [activeSeries, cumBaseInput, chartMode])
+  // Check if any series uses a specific transform
+  const hasCumulative = activeSeries.some(s => (s.transform ?? 'returns') === 'cumulative')
+  const hasDrawdown = activeSeries.some(s => (s.transform ?? 'returns') === 'drawdown')
+  const hasReturns = activeSeries.some(s => (s.transform ?? 'returns') === 'returns')
 
-  // Available dates for BaseDatePicker (intersection of all visible series)
-  const availableDates = useMemo(() => {
-    const visible = activeSeries.filter(s => s.visible !== false)
-    if (visible.length === 0) return []
-    const sets = visible.map(s => new Set(s.originalPoints.map(p => p.date.getTime())))
-    const inter = [...sets[0]].filter(t => sets.every(set => set.has(t)))
-    return inter.sort((a, b) => a - b).map(t => new Date(t))
+  // ── Axis assignment ──────────────────────────────────────────────────────────
+  // Rules: index always left, drawdown always right when not alone,
+  //        returns goes right when index is present, left otherwise.
+  const leftAxisMode: 'index' | 'returns' | 'drawdown' =
+    hasCumulative ? 'index' : hasReturns ? 'returns' : 'drawdown'
+
+  const rightAxisMode: 'returns' | 'drawdown' | null =
+    hasCumulative && hasReturns ? 'returns' :
+    (hasCumulative || hasReturns) && hasDrawdown ? 'drawdown' :
+    null
+
+  const hasRightAxis = rightAxisMode !== null
+
+  // When drawdown is the right axis, it only occupies the top 30% of the chart
+  const drawdownIsRight = rightAxisMode === 'drawdown'
+  const yRightPixelFraction = drawdownIsRight ? 0.3 : 1
+
+  // isMixed: true when more than one transform type is present (used for badge display)
+  const isMixed = [hasCumulative, hasDrawdown, hasReturns].filter(Boolean).length > 1
+
+  // ── Per-series axis assignment ───────────────────────────────────────────────
+  const seriesAxisSide = useCallback((t: string): 'left' | 'right' => {
+    if (t === 'cumulative') return 'left'
+    if (t === 'drawdown') return (hasCumulative || hasReturns) ? 'right' : 'left'
+    // returns
+    return hasCumulative ? 'right' : 'left'
+  }, [hasCumulative, hasReturns])
+
+  // Resolved base date — only meaningful when we have cumulative series
+  const resolvedBaseDate = useMemo(() => {
+    const cumSeries = activeSeries.filter(s => (s.transform ?? 'returns') === 'cumulative')
+    if (cumSeries.length === 0) return null
+    // Use the first cumulative series' base input
+    const baseInput = cumSeries[0].cumBaseInput ?? ''
+    return resolveBaseDate(cumSeries, baseInput)
   }, [activeSeries])
 
-  // Dominant frequency across visible series — drives which SpinDropdowns appear
-  const dominantFreq = useMemo<DataFreq | undefined>(() => {
-    const visible = activeSeries.filter(s => s.visible !== false)
-    if (visible.length === 0) return undefined
-    // Use the finest frequency among visible series
-    const order: DataFreq[] = ['daily', 'monthly', 'quarterly', 'yearly']
-    let finest = 3 // start at 'yearly'
-    for (const s of visible) {
-      const f = s.data_freq ?? detectFrequency(s.originalPoints)
-      const idx = order.indexOf(f)
-      if (idx < finest) finest = idx
+  // ── Y-axis domain computation ────────────────────────────────────────────────
+  const { yDomainLeft, yDomainRight } = useMemo(() => {
+    const leftSeries = displaySeries.filter(s => seriesAxisSide(s.transform ?? 'returns') === 'left')
+    const rightSeries = displaySeries.filter(s => seriesAxisSide(s.transform ?? 'returns') === 'right')
+
+    const leftNat = naturalDomain(leftSeries)
+    const rightNat = rightSeries.length > 0 ? naturalDomain(rightSeries) : null
+
+    if (!leftNat) return { yDomainLeft: undefined, yDomainRight: undefined }
+
+    if (leftAxisMode === 'drawdown') {
+      // Drawdown-only: clamp max to 0, extra top padding for the 0% label
+      const span = Math.abs(leftNat[0] - leftNat[1]) || 100
+      return { yDomainLeft: [leftNat[0] - span * 0.15, 0] as [number, number], yDomainRight: undefined }
     }
-    return order[finest]
-  }, [activeSeries])
+
+    if (rightAxisMode === 'returns' && rightNat) {
+      // Index (left) + Returns (right): align their origins so index=100 and returns=0 share a pixel
+      const { left, right } = alignOriginDomains(leftNat, 100, rightNat, 0)
+      return { yDomainLeft: left, yDomainRight: right }
+    }
+
+    if (rightAxisMode === 'drawdown' && rightNat) {
+      // Index/Returns (left) + Drawdown (right, top 30%)
+      const ddSpan = Math.abs(rightNat[0]) || 100
+      const ddDomain: [number, number] = [rightNat[0] - ddSpan * 0.1, 0]
+      return { yDomainLeft: leftNat, yDomainRight: ddDomain }
+    }
+
+    return { yDomainLeft: leftNat, yDomainRight: undefined }
+  }, [displaySeries, leftAxisMode, rightAxisMode, seriesAxisSide])
 
   // Build a lookup from data-key (series code or __ma__<id>) to display info
   // so the ChartTooltip rows callback can resolve names, colours, and styles.
@@ -919,13 +1021,10 @@ export function GraphTab(): JSX.Element {
       zoomDomain: zoomDomain
         ? { start: zoomDomain.start.toISOString().slice(0, 10), end: zoomDomain.end.toISOString().slice(0, 10) }
         : null,
-      chartMode,
-      cumMethod,
-      cumBaseInput,
       showGrid,
       graphTitle,
     },
-  }), [activeSeries, zoomDomain, chartMode, cumMethod, cumBaseInput, showGrid, graphTitle])
+  }), [activeSeries, zoomDomain, showGrid, graphTitle])
 
   // ── Dirty tracking ─────────────────────────────────────────────────────────
   // Derived comparison: compute a fingerprint of meaningful graph state
@@ -937,13 +1036,13 @@ export function GraphTab(): JSX.Element {
       const maKey = (s.movingAverages ?? []).map(m =>
         `${m.id}:${m.type}:${m.window}:${m.visible}:${m.lineStyle}:${m.lineWidth}`
       ).join('|')
-      return `${s.id}:${s.visible}:${s.lineStyle}:${s.lineWidth}:${maKey}`
+      return `${s.id}:${s.visible}:${s.lineStyle}:${s.lineWidth}:${s.transform ?? 'returns'}:${s.cumMethod ?? ''}:${s.cumBaseInput ?? ''}:${maKey}`
     }).join(';')
     const zoomKey = zoomDomain
       ? `${zoomDomain.start.getTime()}-${zoomDomain.end.getTime()}`
       : 'null'
-    return `${seriesKey}::${zoomKey}::${chartMode}::${cumMethod}::${cumBaseInput}::${showGrid}::${graphTitle}`
-  }, [activeSeries, zoomDomain, chartMode, cumMethod, cumBaseInput, showGrid, graphTitle])
+    return `${seriesKey}::${zoomKey}::${showGrid}::${graphTitle}`
+  }, [activeSeries, zoomDomain, showGrid, graphTitle])
 
   // Snapshot of graphStateKey at the time of last save.  Initialised to current
   // state when savedFilename exists (session was just restored — nothing changed yet).
@@ -1260,7 +1359,9 @@ export function GraphTab(): JSX.Element {
       if (!info) continue
       const raw = nearest[key]
       if (typeof raw !== 'number') continue
-      const isCum = chartMode === 'cumulative'
+      // Determine formatting from per-series transform
+      const seriesObj = activeSeries.find(s => s.code === key || (s.movingAverages ?? []).some(m => `__ma__${m.id}` === key))
+      const isCum = (seriesObj?.transform ?? 'returns') === 'cumulative'
       const suffix = isCum ? '' : '%'
       const decimals = isCum ? 1 : 2
       const formatted = raw < 0
@@ -1270,15 +1371,20 @@ export function GraphTab(): JSX.Element {
     }
     navigator.clipboard.writeText(lines.join('\n')).catch(() => {})
     setRebaseMenu(null)
-  }, [rebaseMenu, pivoted, tooltipOrder, seriesInfoMap, chartMode])
+  }, [rebaseMenu, pivoted, tooltipOrder, seriesInfoMap, activeSeries])
 
   const confirmRebase = useCallback(
     (date: Date): void => {
-      setCumBaseInput(isoDate(date.getFullYear(), date.getMonth() + 1, date.getDate()))
-      if (chartMode !== 'cumulative') setChartMode('cumulative')
+      const baseStr = isoDate(date.getFullYear(), date.getMonth() + 1, date.getDate())
+      // Only update cumBaseInput on series already in cumulative mode
+      for (const s of activeSeries) {
+        if ((s.transform ?? 'returns') === 'cumulative') {
+          updateSeries(s.id, { cumBaseInput: baseStr })
+        }
+      }
       setRebaseMenu(null)
     },
-    [setCumBaseInput, setChartMode, chartMode],
+    [activeSeries, updateSeries],
   )
 
   return (
@@ -1393,57 +1499,14 @@ export function GraphTab(): JSX.Element {
             </div>
           ) : (
             <div data-testid="graph-chart" className="relative flex flex-col w-full gap-2" style={{ maxWidth: `min(${chartMaxWidth}px, calc(100% - 32px))`, transition: 'max-width 0.18s ease-out' }}>
-              {/* Header: chart mode left, date window right */}
+              {/* Header: graph title left, date window right */}
               <div ref={headerRowRef} className="flex items-center justify-between">
-                {/* Title dropdown */}
-                <div ref={titleMenuRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setTitleMenuOpen(o => !o)}
-                    className={`text-left text-2xl font-black leading-tight select-none ${WIN_COLOR_CLASS} group`}
-                    style={WIN_FONT_STYLE}
-                  >
-                    {chartMode === 'cumulative' ? 'Cumulative Returns' : chartMode === 'drawdown' ? 'Drawdowns' : 'Returns'}
-                    <ChevronDown
-                      className={cn(
-                        'inline-block ml-1 h-4 w-4 align-middle transition-transform duration-150 opacity-40 group-hover:opacity-80',
-                        titleMenuOpen && 'rotate-180',
-                      )}
-                      strokeWidth={2.5}
-                    />
-                  </button>
-                  <AnimatePresence>
-                    {titleMenuOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -6 }}
-                        transition={{ duration: 0.12 }}
-                        className="absolute left-0 top-full mt-2 z-50 min-w-[13rem] rounded-lg border border-border bg-popover shadow-md overflow-hidden"
-                      >
-                        {([
-                          ['returns', 'Returns'],
-                          ['cumulative', 'Cumulative Returns'],
-                          ['drawdown', 'Drawdowns'],
-                        ] as [ChartMode, string][]).map(([mode, label]) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            onClick={() => { setChartMode(mode); setTitleMenuOpen(false) }}
-                            className={cn(
-                              'w-full px-4 py-2.5 text-left text-sm transition-colors',
-                              chartMode === mode
-                                ? 'bg-accent text-accent-foreground font-medium'
-                                : 'text-popover-foreground hover:bg-accent/60',
-                            )}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
+                <span
+                  className={`text-2xl font-black leading-tight select-none ${WIN_COLOR_CLASS}`}
+                  style={WIN_FONT_STYLE}
+                >
+                  {graphTitle}
+                </span>
 
                 {uniqueDateLabels.length > 0 && (
                   <div className="flex items-center gap-2">
@@ -1453,51 +1516,6 @@ export function GraphTab(): JSX.Element {
                   </div>
                 )}
               </div>
-
-              {/* Sub-options row — only visible in cumulative mode */}
-              <AnimatePresence>
-                {chartMode === 'cumulative' && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.15 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="flex items-center gap-4 pb-1 text-sm text-muted-foreground">
-                      {/* Method toggle */}
-                      <Selector<CumMethod>
-                        options={[
-                          { value: 'geometric', label: 'Geometric' },
-                          { value: 'arithmetic', label: 'Arithmetic' },
-                        ]}
-                        value={cumMethod}
-                        onChange={setCumMethod}
-                        className="w-auto"
-                        compact
-                      />
-                      {/* Base 100 date — frequency-aware SpinDropdown picker */}
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-muted-foreground">Base 100 =</span>
-                        <BaseDatePicker
-                          availableDates={availableDates}
-                          resolvedDate={resolvedBaseDate}
-                          onChange={setCumBaseInput}
-                          freq={dominantFreq}
-                        />
-                        <button
-                          type="button"
-                          title="Reset to first common date"
-                          onClick={() => setCumBaseInput('')}
-                          className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                        >
-                          <RotateCcw className="h-3 w-3" />
-                        </button>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
 
               {/* Chart — capped at 45 vh, never below 180 px */}
               <div ref={chartAreaRef} className="relative h-[45vh] min-h-[180px] w-full">
@@ -1512,23 +1530,34 @@ export function GraphTab(): JSX.Element {
                   onPanDelta={handlePanDelta}
                   onRightClickPoint={handleRightClickPoint}
                   freezeTooltip={rebaseMenu !== null}
-                  yPadTop={chartMode === 'drawdown' ? 0.25 : undefined}
-                  yClampMax={chartMode === 'drawdown' ? 0 : undefined}
+                  margin={{ right: hasRightAxis ? 56 : 24 }}
+                  yDomainLeft={yDomainLeft}
+                  yDomainRight={yDomainRight}
+                  yRightPixelFraction={yRightPixelFraction}
                 >
-                  {showGrid && <Grid origin={chartMode === 'cumulative' ? 100 : 0} />}
+                  {showGrid && <Grid origin={leftAxisMode === 'index' ? 100 : 0} />}
                   <XAxis />
-                  <YAxis origin={chartMode === 'cumulative' ? 100 : 0} />
+                  <YAxis
+                    origin={leftAxisMode === 'index' ? 100 : 0}
+                    formatValue={leftAxisMode !== 'index' ? (v) => `${v.toFixed(1)}%` : undefined}
+                  />
+                  {hasRightAxis && (
+                    <YAxisRight origin={0} formatValue={(v) => `${v.toFixed(1)}%`} />
+                  )}
                   <Crosshair skipAnimation={isZooming} />
                   {showTooltip && <ChartTooltip
                     order={tooltipOrder}
-                    anchor={chartMode === 'drawdown' ? 'bottom' : 'top'}
+                    anchor={leftAxisMode === 'drawdown' && !hasRightAxis ? 'bottom' : 'top'}
                     rows={(dataKey, color, value) => {
                       const info = seriesInfoMap.get(dataKey)
                       if (!info) return null
                       const isMA = dataKey.startsWith('__ma__')
                       const fmtVal = (v: number | null) => {
                         if (v === null) return '\u2013'
-                        const isCum = chartMode === 'cumulative'
+                        // Determine transform from the series this key belongs to
+                        const parentSeries = activeSeries.find(s => s.code === dataKey || (s.movingAverages ?? []).some(m => `__ma__${m.id}` === dataKey))
+                        const transform = parentSeries?.transform ?? 'returns'
+                        const isCum = transform === 'cumulative'
                         const absStr = Math.abs(v).toFixed(isCum ? 1 : 2)
                         const suffix = isCum ? '' : '%'
                         return v < 0 ? `(${absStr}${suffix})` : `${absStr}${suffix}`
@@ -1553,10 +1582,10 @@ export function GraphTab(): JSX.Element {
                       )
                     }}
                   />}
-                  {/* Origin line — horizontal at 100 (cumulative) or 0 (returns) */}
-                  <OriginLine value={chartMode === 'cumulative' ? 100 : 0} />
-                  {/* Base line — vertical at the resolved base date (cumulative only) */}
-                  {chartMode === 'cumulative' && <BaseLine date={resolvedBaseDate} />}
+                  {/* Origin line — on the left axis (index=100, returns/drawdown=0) */}
+                  <OriginLine value={leftAxisMode === 'index' ? 100 : 0} />
+                  {/* Base line — vertical at the resolved base date (when any series is cumulative) */}
+                  {hasCumulative && <BaseLine date={resolvedBaseDate} />}
                   {/* Drag-select highlight — renders inside the SVG at selection time */}
                   <SegmentBackground />
                   <SegmentLineFrom />
@@ -1574,9 +1603,10 @@ export function GraphTab(): JSX.Element {
                         s.lineStyle === 'dotted' ? '2 3' :
                         undefined
                       }
+                      yAxis={seriesAxisSide(s.transform ?? 'returns')}
                     />
                   ))}
-                  {/* MA overlay lines — rendered above parent series */}
+                  {/* MA overlay lines — rendered above parent series, same axis as parent */}
                   {visibleSeries.flatMap(s =>
                     (s.movingAverages ?? [])
                       .filter(ma => ma.visible !== false)
@@ -1592,6 +1622,7 @@ export function GraphTab(): JSX.Element {
                             (ma.lineStyle ?? 'dotted') === 'dotted' ? '2 3' :
                             undefined
                           }
+                          yAxis={seriesAxisSide(s.transform ?? 'returns')}
                         />
                       ))
                   )}
@@ -1662,6 +1693,20 @@ export function GraphTab(): JSX.Element {
                           />
                         </svg>
                         <span className="text-foreground font-medium">{s.name}</span>
+                        {/* Transform badge — shown whenever any mix of transforms is present */}
+                        {isMixed && (
+                          <span className="px-1 py-0.5 rounded text-[10px] font-semibold leading-none bg-muted text-muted-foreground">
+                            {(s.transform ?? 'returns') === 'cumulative' ? 'INDEX' :
+                             (s.transform ?? 'returns') === 'drawdown' ? 'DD' :
+                             'RETURN'}
+                          </span>
+                        )}
+                        {/* In uniform-mode (all same transform) show badge only for non-default transforms */}
+                        {!isMixed && (s.transform ?? 'returns') !== 'returns' && (
+                          <span className="px-1 py-0.5 rounded text-[10px] font-semibold leading-none bg-muted text-muted-foreground">
+                            {(s.transform ?? 'returns') === 'cumulative' ? 'INDEX' : 'DD'}
+                          </span>
+                        )}
                         {/* Visibility toggle */}
                         <button
                           type="button"
@@ -1936,7 +1981,7 @@ export function GraphTab(): JSX.Element {
                 >
                   Copy Values
                 </motion.button>
-                {chartMode === 'cumulative' && (
+                {hasCumulative && (
                   <motion.button
                     type="button"
                     onClick={() => confirmRebase(rebaseMenu.date)}

@@ -60,6 +60,9 @@ export function serializeSeries(s: DataSeries): SessionSeries {
     lineStyle: s.lineStyle,
     lineWidth: s.lineWidth,
     movingAverages: s.movingAverages?.map(serializeMA),
+    transform: s.transform,
+    cumMethod: s.cumMethod,
+    cumBaseInput: s.cumBaseInput,
     points: s.points.map((p) => ({ date: p.date.toISOString().slice(0, 10), value: p.value })),
     originalPoints: s.originalPoints.map((p) => ({ date: p.date.toISOString().slice(0, 10), value: p.value })),
   }

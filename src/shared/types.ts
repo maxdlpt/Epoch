@@ -5,6 +5,12 @@ export interface DataPoint {
 
 export type DataFreq = 'daily' | 'monthly' | 'quarterly' | 'yearly'
 
+/** Per-series transform — determines how originalPoints are mapped to display points. */
+export type SeriesTransform = 'returns' | 'cumulative' | 'drawdown'
+
+/** Method for cumulative return calculation (only relevant when transform === 'cumulative'). */
+export type CumMethod = 'geometric' | 'arithmetic'
+
 /**
  * A moving-average overlay attached to a parent DataSeries.
  * Ephemeral — computed from the series' current display points and never
@@ -38,6 +44,9 @@ export interface DataSeries {
   lineStyle?: 'solid' | 'dashed' | 'dotted'  // defaults to 'solid'
   lineWidth?: number     // stroke width in px; defaults to 2
   movingAverages?: MAComponent[]
+  transform?: SeriesTransform    // per-series display transform; defaults to 'returns' (raw)
+  cumMethod?: CumMethod          // only when transform === 'cumulative'; defaults to 'geometric'
+  cumBaseInput?: string           // only when transform === 'cumulative'; '' = first date
 }
 
 /**
@@ -113,6 +122,9 @@ export interface SessionSeries {
   lineStyle?: 'solid' | 'dashed' | 'dotted'
   lineWidth?: number
   movingAverages?: SessionMA[]
+  transform?: SeriesTransform
+  cumMethod?: CumMethod
+  cumBaseInput?: string
   points: { date: string; value: number }[]
   originalPoints: { date: string; value: number }[]
 }

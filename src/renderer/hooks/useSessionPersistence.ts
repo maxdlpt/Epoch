@@ -20,9 +20,6 @@ export function useSessionPersistence(): void {
   // Active graph fields — trigger re-save when the live graph changes
   const activeSeries  = useGraphStore((s) => s.activeSeries)
   const zoomDomain    = useGraphStore((s) => s.zoomDomain)
-  const chartMode     = useGraphStore((s) => s.chartMode)
-  const cumMethod     = useGraphStore((s) => s.cumMethod)
-  const cumBaseInput  = useGraphStore((s) => s.cumBaseInput)
   const showGrid      = useGraphStore((s) => s.showGrid)
   const graphTitle    = useGraphStore((s) => s.graphTitle)
   const savedFilename = useGraphStore((s) => s.savedFilename)
@@ -52,7 +49,7 @@ export function useSessionPersistence(): void {
       if (timerRef.current) clearTimeout(timerRef.current)
     }
   }, [
-    activeSeries, zoomDomain, chartMode, cumMethod, cumBaseInput,
+    activeSeries, zoomDomain,
     showGrid, graphTitle, savedFilename,
     openGraphs, activeGraphId, graphsExpanded,
   ])

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { DataSeries } from '../../shared/types'
+import type { DataSeries, SeriesTransform, CumMethod } from '../../shared/types'
 
 interface ZoomDomain {
   start: Date
@@ -8,16 +8,10 @@ interface ZoomDomain {
 
 type RightPanel = 'operations' | 'addLine' | null
 
-export type ChartMode = 'returns' | 'cumulative' | 'drawdown'
-export type CumMethod  = 'geometric' | 'arithmetic'
-
 interface GraphState {
   activeSeries: DataSeries[]
   zoomDomain: ZoomDomain | null
   rightPanel: RightPanel
-  chartMode: ChartMode
-  cumMethod: CumMethod
-  cumBaseInput: string
   showGrid: boolean
   graphTitle: string
   savedFilename: string | null
@@ -28,22 +22,18 @@ interface GraphState {
   toggleSeriesVisibility: (id: string) => void
   setZoomDomain: (domain: ZoomDomain | null) => void
   setRightPanel: (panel: RightPanel) => void
-  setChartMode: (mode: ChartMode) => void
-  setCumMethod: (method: CumMethod) => void
-  setCumBaseInput: (input: string) => void
   setShowGrid: (show: boolean) => void
   setGraphTitle: (title: string) => void
   setSavedFilename: (filename: string | null) => void
   resetGraph: () => void
+  /** Bulk-set transform for all series at once (convenience for "Set All To..." action). */
+  setAllTransforms: (transform: SeriesTransform, cumMethod?: CumMethod, cumBaseInput?: string) => void
 }
 
 export const useGraphStore = create<GraphState>((set) => ({
   activeSeries: [],
   zoomDomain: null,
   rightPanel: null,
-  chartMode: 'returns',
-  cumMethod: 'geometric',
-  cumBaseInput: '',
   showGrid: true,
   graphTitle: 'New Graph',
   savedFilename: null,
@@ -66,15 +56,10 @@ export const useGraphStore = create<GraphState>((set) => ({
       return {
         ...s,
         visible: nowVisible,
-        // When hiding: mark all MAs hidden so their buttons reflect the right state
-        // and one click is enough to show a single MA independently.
-        // When showing: leave MA states as-is (preserves any independent choices).
         movingAverages: nowVisible
-          // Show: restore only MAs that were hidden by the parent hide (not explicitly hidden by user)
           ? (s.movingAverages ?? []).map(ma =>
               ma.hiddenWithParent ? { ...ma, visible: true, hiddenWithParent: undefined } : ma
             )
-          // Hide: mark visible MAs as hidden-by-parent; leave already-hidden MAs untouched
           : (s.movingAverages ?? []).map(ma =>
               ma.visible !== false ? { ...ma, visible: false, hiddenWithParent: true } : ma
             ),
@@ -83,9 +68,6 @@ export const useGraphStore = create<GraphState>((set) => ({
   })),
   setZoomDomain: (domain) => set({ zoomDomain: domain }),
   setRightPanel: (panel) => set({ rightPanel: panel }),
-  setChartMode: (mode) => set({ chartMode: mode }),
-  setCumMethod: (method) => set({ cumMethod: method }),
-  setCumBaseInput: (input) => set({ cumBaseInput: input }),
   setShowGrid: (show) => set({ showGrid: show }),
   setGraphTitle: (title) => set({ graphTitle: title }),
   setSavedFilename: (filename) => set({ savedFilename: filename }),
@@ -93,11 +75,16 @@ export const useGraphStore = create<GraphState>((set) => ({
     activeSeries: [],
     zoomDomain: null,
     rightPanel: null,
-    chartMode: 'returns',
-    cumMethod: 'geometric',
-    cumBaseInput: '',
     showGrid: true,
     graphTitle: 'New Graph',
     savedFilename: null,
   }),
+  setAllTransforms: (transform, cumMethod, cumBaseInput) => set((state) => ({
+    activeSeries: state.activeSeries.map(s => ({
+      ...s,
+      transform,
+      cumMethod: cumMethod ?? s.cumMethod,
+      cumBaseInput: cumBaseInput ?? s.cumBaseInput,
+    })),
+  })),
 }))

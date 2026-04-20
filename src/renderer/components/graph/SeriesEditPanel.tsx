@@ -662,6 +662,79 @@ export function SeriesEditPanel({ series, placement, activeTab, onTabChange, onC
       {activeTab === 'calculations' && (
         <div className="flex flex-col gap-4">
 
+          {/* ── Display As (per-series transform selector) ───────────────── */}
+          <section className="space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+              Display As
+            </p>
+            <div className="flex gap-2">
+              {([
+                { value: 'returns' as const, label: 'Raw Returns' },
+                { value: 'cumulative' as const, label: 'Cumulative' },
+                { value: 'drawdown' as const, label: 'Drawdowns' },
+              ]).map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => onUpdate({ transform: opt.value })}
+                  className={cn(
+                    'flex-1 rounded-md border py-1.5 text-xs font-medium transition-colors',
+                    (series.transform ?? 'returns') === opt.value
+                      ? 'border-foreground bg-foreground text-background'
+                      : 'border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground',
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {/* Cumulative sub-options — only when this series is set to cumulative */}
+            <AnimatePresence>
+              {(series.transform ?? 'returns') === 'cumulative' && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="overflow-hidden"
+                >
+                  <div className="mt-2 space-y-2 pl-1">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Method</p>
+                      <div className="flex gap-2">
+                        {(['geometric', 'arithmetic'] as const).map(m => (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => onUpdate({ cumMethod: m })}
+                            className={cn(
+                              'flex-1 rounded-md border py-1 text-xs font-medium capitalize transition-colors',
+                              (series.cumMethod ?? 'geometric') === m
+                                ? 'border-foreground bg-foreground text-background'
+                                : 'border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground',
+                            )}
+                          >
+                            {m}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Base Date</p>
+                      <input
+                        type="text"
+                        placeholder="YYYY-MM-DD (default: first date)"
+                        value={series.cumBaseInput ?? ''}
+                        onChange={(e) => onUpdate({ cumBaseInput: e.target.value })}
+                        className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring"
+                      />
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </section>
+
           {/* ── Draggable MA list ─────────────────────────────────────────── */}
           {existingMAs.length > 0 && (
             <section className="space-y-2">

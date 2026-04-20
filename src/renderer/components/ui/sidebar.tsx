@@ -128,9 +128,6 @@ function buildSavedGraphFromStore(): SavedGraph {
       zoomDomain: s.zoomDomain
         ? { start: s.zoomDomain.start.toISOString().slice(0, 10), end: s.zoomDomain.end.toISOString().slice(0, 10) }
         : null,
-      chartMode: s.chartMode,
-      cumMethod: s.cumMethod,
-      cumBaseInput: s.cumBaseInput,
       showGrid: s.showGrid,
       graphTitle: s.graphTitle,
       savedFilename: s.savedFilename ?? undefined,
