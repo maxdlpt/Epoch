@@ -53,6 +53,8 @@ export function serializeSeries(s: DataSeries): SessionSeries {
     code: s.code,
     description: s.description,
     data_freq: s.data_freq,
+    dataType: s.dataType,
+    startingValue: s.startingValue,
     source: s.source,
     dbId: s.dbId,
     color: s.color,
@@ -92,12 +94,19 @@ export const ipc = {
         name: s.name,
         code: s.code,
         description: s.description,
-        points: s.points.map((p) => ({
+        dataType: s.dataType,
+        startingValue: s.startingValue,
+        // originalPoints holds canonical growth rates; points may be transformed
+        points: s.originalPoints.map((p) => ({
           date: p.date.toISOString().slice(0, 10),
           value: p.value,
         })),
       }),
     deleteSeries: (id: string): Promise<void> => window.tsv.memory.deleteSeries(id),
+    updateSeriesMeta: (
+      id: string,
+      patch: { dataType: 'level' | 'growth'; startingValue?: number },
+    ): Promise<void> => window.tsv.memory.updateSeriesMeta(id, patch),
   },
   external: {
     listSeries: (path: string): Promise<DBRecord[]> => window.tsv.external.listSeries(path),
@@ -112,13 +121,21 @@ export const ipc = {
         name: s.name,
         code: s.code,
         description: s.description,
-        points: s.points.map((p) => ({
+        dataType: s.dataType,
+        startingValue: s.startingValue,
+        // originalPoints holds canonical growth rates; points may be transformed
+        points: s.originalPoints.map((p) => ({
           date: p.date.toISOString().slice(0, 10),
           value: p.value,
         })),
       }),
     deleteSeries: (path: string, id: string): Promise<void> =>
       window.tsv.external.deleteSeries(path, id),
+    updateSeriesMeta: (
+      path: string,
+      id: string,
+      patch: { dataType: 'level' | 'growth'; startingValue?: number },
+    ): Promise<void> => window.tsv.external.updateSeriesMeta(path, id, patch),
   },
   settings: {
     get: (): Promise<AppSettings> => window.tsv.settings.get(),
