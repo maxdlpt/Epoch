@@ -12,6 +12,7 @@ import { SeriesEditPanel } from '../graph/SeriesEditPanel'
 import { cn } from '../../lib/utils'
 import { ipc, serializeSeries } from '../../lib/ipc'
 import { computeMA } from '../../lib/ma'
+import { reconstructLevels, toLevelIndex } from '../../lib/transforms'
 import type { DataFreq, DataSeries, DataPoint, SavedGraph, CumMethod } from '../../../shared/types'
 
 function ExportImageIcon({ className }: { className?: string }) {
@@ -182,6 +183,60 @@ function applyCumulativeReturns(
     }))
 
     return { ...s, points: cumPoints, movingAverages: newMAs }
+  })
+}
+
+/**
+ * Apply Level-series index display.
+ *
+ * For each Level series: reconstruct absolute price levels from the stored
+ * growth rates (using startingValue), then normalise to 100 at the common
+ * base date.  Intersection-date semantics mirror applyCumulativeReturns so
+ * that mixed Level + Growth cumulative charts share the same x-axis range.
+ *
+ * baseInput: user-supplied date string (same cumBaseInput field as growth).
+ * Falls back to earliest intersection date when blank.
+ */
+function applyLevelIndex(
+  series: DataSeries[],
+  baseInput: string,
+): DataSeries[] {
+  if (series.length === 0) return series
+
+  const visible = series.filter(s => s.visible !== false)
+  if (visible.length === 0) return series
+
+  const sets = visible.map(s => new Set(s.originalPoints.map(p => p.date.getTime())))
+  const intersectionTs = new Set<number>(
+    [...sets[0]].filter(t => sets.every(set => set.has(t))),
+  )
+  const sorted = Array.from(intersectionTs).sort((a, b) => a - b)
+  if (sorted.length === 0) return series
+
+  let baseTs = sorted[0]
+  if (baseInput.trim()) {
+    const parsed = new Date(baseInput.trim())
+    if (!isNaN(parsed.getTime())) {
+      const target = parsed.getTime()
+      baseTs = sorted.reduce((best, t) =>
+        Math.abs(t - target) < Math.abs(best - target) ? t : best,
+      )
+    }
+  }
+  const baseDate = new Date(baseTs)
+
+  return series.map(s => {
+    const startingValue = s.startingValue ?? 1
+    const filtered = s.originalPoints.filter(p => intersectionTs.has(p.date.getTime()))
+    const levelPts = reconstructLevels(filtered, startingValue)
+    const indexPts = toLevelIndex(levelPts, baseDate)
+
+    const newMAs = (s.movingAverages ?? []).map(ma => ({
+      ...ma,
+      points: computeMA(indexPts, ma.type, ma.window),
+    }))
+
+    return { ...s, points: indexPts, movingAverages: newMAs }
   })
 }
 
@@ -868,24 +923,36 @@ export function GraphTab(): JSX.Element {
 
     // Group by transform type
     const raw: DataSeries[] = []
-    const cumGroups = new Map<string, DataSeries[]>()  // key = cumMethod:cumBaseInput
+    const levelCumGroups = new Map<string, DataSeries[]>()   // key = cumBaseInput (level series)
+    const growthCumGroups = new Map<string, DataSeries[]>()  // key = cumMethod:cumBaseInput (growth series)
     const ddSeries: DataSeries[] = []
 
     for (const s of activeSeries) {
       const t = s.transform ?? 'returns'
       if (t === 'returns') raw.push(s)
       else if (t === 'drawdown') ddSeries.push(s)
-      else {
-        const key = `${s.cumMethod ?? 'geometric'}:${s.cumBaseInput ?? ''}`
-        const group = cumGroups.get(key) ?? []
+      else if (s.dataType === 'level') {
+        const key = s.cumBaseInput ?? ''
+        const group = levelCumGroups.get(key) ?? []
         group.push(s)
-        cumGroups.set(key, group)
+        levelCumGroups.set(key, group)
+      } else {
+        const key = `${s.cumMethod ?? 'geometric'}:${s.cumBaseInput ?? ''}`
+        const group = growthCumGroups.get(key) ?? []
+        group.push(s)
+        growthCumGroups.set(key, group)
       }
     }
 
-    // Apply cumulative returns per group (independent intersection dates)
+    // Apply level index per group (reconstruct levels → normalise to 100)
+    const levelCumResults: DataSeries[] = []
+    for (const [baseInput, group] of levelCumGroups) {
+      levelCumResults.push(...applyLevelIndex(group, baseInput))
+    }
+
+    // Apply growth cumulative returns per group (independent intersection dates)
     const cumResults: DataSeries[] = []
-    for (const [key, group] of cumGroups) {
+    for (const [key, group] of growthCumGroups) {
       const [method, baseInput] = key.split(':') as [CumMethod, string]
       cumResults.push(...applyCumulativeReturns(group, method, baseInput))
     }
@@ -895,7 +962,7 @@ export function GraphTab(): JSX.Element {
 
     // Merge back in original order
     const resultMap = new Map<string, DataSeries>()
-    for (const s of [...raw, ...cumResults, ...ddResults]) resultMap.set(s.id, s)
+    for (const s of [...raw, ...levelCumResults, ...cumResults, ...ddResults]) resultMap.set(s.id, s)
     return activeSeries.map(s => resultMap.get(s.id) ?? s)
   }, [activeSeries])
 
