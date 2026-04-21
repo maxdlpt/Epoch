@@ -1,7 +1,7 @@
 import { useState, useCallback, forwardRef, useImperativeHandle, useRef, useEffect } from 'react'
 import { Check, ChevronDown, Database, HardDrive, BarChart2, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import type { DataSeries, DataFreq } from '../../../shared/types'
+import type { DataSeries, DataFreq, DataType } from '../../../shared/types'
 import { formatFreq } from '../../lib/freq'
 import { useDBStore } from '../../store/db'
 import { cn } from '../../lib/utils'
@@ -36,6 +36,7 @@ interface Draft {
   code: string
   description: string
   data_freq: DataFreq
+  dataType: DataType
 }
 
 // ─── Destination selector ─────────────────────────────────────────────────────
@@ -163,6 +164,7 @@ export const SeriesReviewPanel = forwardRef<SeriesReviewHandle, Props>(
         code: s.code,
         description: s.description,
         data_freq: s.data_freq ?? 'daily',
+        dataType: s.dataType ?? 'growth',
       }]))
     )
     const [destinations, setDestinations] = useState<Map<string, Destination>>(
@@ -251,6 +253,17 @@ export const SeriesReviewPanel = forwardRef<SeriesReviewHandle, Props>(
                     className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
                     {FREQS.map(f => <option key={f} value={f}>{formatFreq(f)}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Data Type</label>
+                  <select
+                    value={draft.dataType}
+                    onChange={e => updateDraft(s.id, { dataType: e.target.value as DataType })}
+                    className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="growth">Returns</option>
+                    <option value="level">Level (index/price)</option>
                   </select>
                 </div>
               </div>
