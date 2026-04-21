@@ -341,7 +341,7 @@ This is managed via `hiddenWithParent`:
 
 ### Built-in Palettes
 
-Five built-in palettes defined in **light mode**: `default` (8 vibrant colors), `pastel` (8 soft), `muted` (8 medium), `mono` (8 blue-to-grey), `heritage` (7 corporate colors for asset class charts).
+Five built-in palettes defined in **light mode**: `default` (8 vibrant colors), `pastel` (8 soft), `muted` (8 medium), `mono` (8 blue-to-grey), `corporate` (7 corporate colors for asset class charts).
 
 ### Dark Mode Colors
 
@@ -711,4 +711,4 @@ docs/
 
 ## License
 
-Private project by Maximilien Delaporte. Not open-source.
+MIT

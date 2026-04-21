@@ -7,7 +7,7 @@ export const PALETTES: Record<string, string[]> = {
   mono:     ['#1d4ed8', '#1e40af', '#1e3a8a', '#172554', '#0f172a', '#334155', '#475569', '#64748b'],
   // Asset-class palette — Private Equity, Public Equity, Fixed Income, Hedge Funds,
   // Cash, Real Assets, Other (blue-grey).  Dark variant auto-generated via generateComplement.
-  heritage: ['#0d1e38', '#74b2e2', '#c8ddf0', '#D9F05A', '#FF5532', '#DCD8CB', '#6e7c8a'],
+  corporate: ['#0d1e38', '#74b2e2', '#c8ddf0', '#D9F05A', '#FF5532', '#DCD8CB', '#6e7c8a'],
 }
 
 // ─── HSL conversion helpers ───────────────────────────────────────────────────

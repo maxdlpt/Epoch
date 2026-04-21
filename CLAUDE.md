@@ -22,6 +22,53 @@ npm run rebuild      # electron-rebuild for better-sqlite3 (run after any Node v
 
 ---
 
+## Publishing a release (auto-update)
+
+The app uses **GitHub Releases** as its update server. When a new version is published, the app checks on next launch, downloads the update silently, and prompts the user to restart.
+
+### When the user says "publish an update" or "release a new version":
+
+**Step 1 — Commit any pending changes:**
+```bash
+git add <changed files>
+git commit -m "feat/fix: description of changes"
+```
+Do not skip this step even if the working tree looks clean — confirm with `git status` first.
+
+**Step 2 — Bump the version in `package.json`:**
+```bash
+# patch = bug fixes (1.0.0 → 1.0.1)
+# minor = new features (1.0.0 → 1.1.0)
+# major = breaking changes (1.0.0 → 2.0.0)
+npm version patch   # or minor or major
+```
+This updates `package.json` and creates a version commit + git tag automatically.
+
+**Step 3 — Push source code and tag to GitHub:**
+```bash
+git push && git push --tags
+```
+This must always run before the build so the repo reflects what version is in the wild.
+
+**Step 4 — Build and publish:**
+```bash
+npm run build:win && npx electron-builder --publish always
+```
+This builds the Windows installer and uploads it (plus a `latest.yml` metadata file) to GitHub Releases.
+
+**Step 5 — Confirm:**
+Check that the release appeared at `https://github.com/maxdlpt/TimeSeriesVisualiser/releases`. The user's boss will receive the update automatically on next app launch.
+
+### What each piece does:
+- `electron-builder.yml` — `publish: provider: github` tells the builder where to upload
+- `electron-updater` (in `src/main/index.ts`) — checks GitHub Releases on launch, downloads silently, prompts restart when ready
+- `GH_TOKEN` — a GitHub personal access token with `repo` scope (or `public_repo` for public repos); set as an environment variable before publishing, never commit it
+
+### The boss's experience:
+He installs once from a link you send him. After that, every update downloads in the background while he works and prompts "Restart to apply update?" when ready. He never touches a terminal.
+
+---
+
 ## Tech stack (exact versions)
 
 | Layer | Library | Version | Notes |
@@ -551,7 +598,7 @@ const memDB = new MemoryDB(rawDb)
   pastel:   ['#93c5fd', '#fca5a5', '#86efac', '#fde68a', '#c4b5fd', '#67e8f9', '#fed7aa', '#f9a8d4'],
   muted:    ['#60a5fa', '#f87171', '#4ade80', '#fbbf24', '#a78bfa', '#22d3ee', '#fb923c', '#f472b6'],
   mono:     ['#1d4ed8', '#1e40af', '#1e3a8a', '#172554', '#0f172a', '#334155', '#475569', '#64748b'],
-  heritage: ['#0d1e38', '#74b2e2', '#c8ddf0', '#DCD8CB', '#FF5532', '#D9F05A', '#6e7c8a'],  // 7 colors
+  corporate: ['#0d1e38', '#74b2e2', '#c8ddf0', '#DCD8CB', '#FF5532', '#D9F05A', '#6e7c8a'],  // 7 colors
 }
 ```
 

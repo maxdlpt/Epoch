@@ -9,3 +9,12 @@ dist/
 
 # TypeScript incremental build cache (regenerated on every tsc run)
 tsconfig.*.tsbuildinfo
+
+# Claude Code internal files (settings, session logs, planning docs)
+.claude/
+docs/superpowers/
+
+# Internal process / design notes not relevant to the codebase
+docs/team-lead-fd-substitute.md
+docs/team-lead-fd-substitute-log.md
+TimeSeriesVisualiser.md
