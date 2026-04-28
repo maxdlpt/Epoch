@@ -1,7 +1,8 @@
 "use client"
 import { useCallback, useState } from "react"
 import { createPortal } from "react-dom"
-import { BarChart2, Upload, Settings, Database, ChevronsRight, Plus, ChevronDown, X } from "lucide-react"
+import { Upload, Settings, Database, ChevronsRight, Plus, ChevronDown, X } from "lucide-react"
+import logoUrl from '../../assets/logo.svg'
 import { AnimatePresence, motion, Reorder } from "motion/react"
 import { useAppStore } from "../../store/app"
 import { useGraphStore } from "../../store/graph"
@@ -246,11 +247,12 @@ export const Sidebar = () => {
     >
       {/* Logo */}
       <div className="mb-6 border-b border-border pb-4">
-        <div className="flex items-center gap-3 px-2 py-2">
-          <div className="grid size-10 shrink-0 place-content-center rounded-lg bg-primary shadow-sm">
-            <BarChart2 className="h-5 w-5 text-primary-foreground" />
-          </div>
-          {open && <span className="text-sm font-semibold text-foreground">TimeSeries</span>}
+        <div className="flex items-center justify-center px-2 py-2">
+          <img
+            src={logoUrl}
+            alt="TimeSeries Visualiser"
+            className={`object-contain transition-all duration-300 ${open ? 'h-10 w-full' : 'h-8 w-8'}`}
+          />
         </div>
       </div>
 
