@@ -4,14 +4,25 @@ import type { CustomPaletteEntry } from '../../shared/types'
 // Mono is NOT listed here — it is generated dynamically from the active UI
 // theme's primary color via generateMonoPalette() at render time.
 
+/** Light-mode-only built-in palettes. Dark variants are auto-generated via
+ *  `generateComplement()`.  For palettes that need hand-picked dark colours,
+ *  use `DUAL_PALETTES` instead. */
 export const PALETTES: Record<string, string[]> = {
   // Asset-class palette — Private Equity, Public Equity, Fixed Income, Hedge Funds,
   // Cash, Real Assets, Other (blue-grey).
   corporate: ['#0d1e38', '#74b2e2', '#c8ddf0', '#D9F05A', '#FF5532', '#DCD8CB', '#6e7c8a'],
 }
 
+/** Built-in palettes with explicit light AND dark variants (not auto-generated). */
+export const DUAL_PALETTES: Record<string, { light: string[]; dark: string[] }> = {
+  vibrant: {
+    light: ['#e21e49', '#e96306', '#f7c015', '#3add76', '#2bdbf9', '#0950c4', '#3809a3', '#b71364'],
+    dark:  ['#e11d48', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'],
+  },
+}
+
 /** Ordered list of all built-in palette keys, including the dynamic `mono`. */
-export const BUILT_IN_PALETTE_KEYS = ['mono', 'corporate'] as const
+export const BUILT_IN_PALETTE_KEYS = ['mono', 'corporate', 'vibrant'] as const
 
 // ─── UI-theme primary colors ──────────────────────────────────────────────────
 // Light-mode primary hex for each UI theme. Used to derive the Mono palette's
@@ -128,6 +139,9 @@ export function getAllPalettes(
   }
   for (const [name, colors] of Object.entries(PALETTES)) {
     builtIn[name] = isDark ? generateComplement(colors) : colors
+  }
+  for (const [name, entry] of Object.entries(DUAL_PALETTES)) {
+    builtIn[name] = isDark ? entry.dark : entry.light
   }
   const custom: Record<string, string[]> = {}
   for (const [name, entry] of Object.entries(customPalettes)) {

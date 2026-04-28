@@ -51,7 +51,7 @@ function loadSnapshotToStore(session: GraphSession) {
     }
   }
   if (session.showGrid !== undefined) g.setShowGrid(session.showGrid)
-  if (session.graphTitle) g.setGraphTitle(session.graphTitle)
+  g.setGraphTitle(session.graphTitle ?? 'New Graph')
   g.setSavedFilename(session.savedFilename ?? null)
 
   // Recolor all series by position index to match the current palette.

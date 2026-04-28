@@ -32,6 +32,7 @@ export interface MAComponent {
   points: DataPoint[]  // computed; recomputed when a transform is applied
 }
 
+
 export interface DataSeries {
   id: string
   name: string
@@ -51,6 +52,8 @@ export interface DataSeries {
   lineStyle?: 'solid' | 'dashed' | 'dotted'  // defaults to 'solid'
   lineWidth?: number     // stroke width in px; defaults to 2
   movingAverages?: MAComponent[]
+  /** Shift the series N periods along the x-axis. Positive = forward (lag), negative = backward (lead). */
+  timeShift?: number
   transform?: SeriesTransform    // per-series display transform; defaults to 'returns' (raw)
   cumMethod?: CumMethod          // only when transform === 'cumulative'; defaults to 'geometric'
   cumBaseInput?: string           // only when transform === 'cumulative'; '' = first date
@@ -135,6 +138,7 @@ export interface SessionSeries {
   lineStyle?: 'solid' | 'dashed' | 'dotted'
   lineWidth?: number
   movingAverages?: SessionMA[]
+  timeShift?: number
   transform?: SeriesTransform
   cumMethod?: CumMethod
   cumBaseInput?: string

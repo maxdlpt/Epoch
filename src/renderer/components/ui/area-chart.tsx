@@ -506,7 +506,7 @@ function useChartInteraction({
  * Uses nearest-neighbour rounding so tick density stays close to the requested
  * numTicks even when the domain range doesn't divide cleanly.
  */
-function niceStep(rawStep: number): number {
+export function niceStep(rawStep: number): number {
   if (rawStep <= 0) return 1
   const mag = 10 ** Math.floor(Math.log10(rawStep))
   const norm = rawStep / mag
@@ -526,7 +526,7 @@ function niceStep(rawStep: number): number {
  * Values outside `domain` are excluded; floating-point rounding is suppressed
  * so label strings like "99.99999…" never appear.
  */
-function originAlignedYTicks(domain: [number, number], origin: number, numTicks: number): number[] {
+export function originAlignedYTicks(domain: [number, number], origin: number, numTicks: number): number[] {
   const [min, max] = domain
   if (max === min) return [origin]
   const step = niceStep((max - min) / Math.max(numTicks, 1))

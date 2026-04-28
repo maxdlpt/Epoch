@@ -26,6 +26,7 @@ function rawToDataSeries(
 
 // ─── Session serialisation helpers ────────────────────────────────────────────
 
+
 function serializeMA(ma: MAComponent): SessionMA {
   return {
     id: ma.id,
@@ -63,6 +64,7 @@ export function serializeSeries(s: DataSeries): SessionSeries {
     lineStyle: s.lineStyle,
     lineWidth: s.lineWidth,
     movingAverages: s.movingAverages?.map(serializeMA),
+    timeShift: s.timeShift,
     transform: s.transform,
     cumMethod: s.cumMethod,
     cumBaseInput: s.cumBaseInput,

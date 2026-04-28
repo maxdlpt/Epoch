@@ -6,12 +6,12 @@ import { useGraphStore } from '../../store/graph'
 import { useAppStore } from '../../store/app'
 import { useGraphManagerStore } from '../../store/graph-manager'
 import { Button } from '../ui/button'
-import { AreaChart, Area, XAxis, YAxis, YAxisRight, Grid, SegmentBackground, SegmentLineFrom, SegmentLineTo, Crosshair, ChartTooltip, OriginLine, BaseLine } from '../ui/area-chart'
+import { AreaChart, Area, XAxis, YAxis, YAxisRight, Grid, SegmentBackground, SegmentLineFrom, SegmentLineTo, Crosshair, ChartTooltip, OriginLine, BaseLine, originAlignedYTicks } from '../ui/area-chart'
 import { AddLinePanel } from '../graph/AddLinePanel'
 import { SeriesEditPanel } from '../graph/SeriesEditPanel'
 import { cn } from '../../lib/utils'
 import { ipc, serializeSeries } from '../../lib/ipc'
-import { computeMA } from '../../lib/ma'
+import { computeMA, computeTimeShift } from '../../lib/ma'
 import { reconstructLevels, toLevelIndex } from '../../lib/transforms'
 import type { DataFreq, DataSeries, DataPoint, SavedGraph, CumMethod, SeriesTransform } from '../../../shared/types'
 
@@ -181,7 +181,6 @@ function applyCumulativeReturns(
       ...ma,
       points: computeMA(cumPoints, ma.type, ma.window),
     }))
-
     return { ...s, points: cumPoints, movingAverages: newMAs }
   })
 }
@@ -235,7 +234,6 @@ function applyLevelIndex(
       ...ma,
       points: computeMA(indexPts, ma.type, ma.window),
     }))
-
     return { ...s, points: indexPts, movingAverages: newMAs }
   })
 }
@@ -286,7 +284,6 @@ function applyDrawdown(series: DataSeries[]): DataSeries[] {
       ...ma,
       points: computeMA(ddPoints, ma.type, ma.window),
     }))
-
     return { ...s, points: ddPoints, movingAverages: newMAs }
   })
 }
@@ -346,13 +343,29 @@ function pivotSeries(series: DataSeries[], intersectOnly = false): Record<string
  * Compute the natural padded [min, max] domain across all points and MA points
  * in a set of series. Returns null when the series list is empty or has no data.
  */
-function naturalDomain(series: DataSeries[], padFrac = 0.1): [number, number] | null {
+function naturalDomain(
+  series: DataSeries[],
+  padFrac = 0.1,
+  dateRange?: { start: Date; end: Date } | null,
+): [number, number] | null {
+  const startMs = dateRange ? dateRange.start.getTime() : -Infinity
+  const endMs   = dateRange ? dateRange.end.getTime()   :  Infinity
   let min = Infinity
   let max = -Infinity
   for (const s of series) {
-    for (const p of s.points) { if (p.value < min) min = p.value; if (p.value > max) max = p.value }
+    for (const p of s.points) {
+      const t = p.date.getTime()
+      if (t < startMs || t > endMs) continue
+      if (p.value < min) min = p.value
+      if (p.value > max) max = p.value
+    }
     for (const ma of s.movingAverages ?? []) {
-      for (const p of ma.points) { if (p.value < min) min = p.value; if (p.value > max) max = p.value }
+      for (const p of ma.points) {
+        const t = p.date.getTime()
+        if (t < startMs || t > endMs) continue
+        if (p.value < min) min = p.value
+        if (p.value > max) max = p.value
+      }
     }
   }
   if (!isFinite(min)) return null
@@ -361,28 +374,51 @@ function naturalDomain(series: DataSeries[], padFrac = 0.1): [number, number] | 
 }
 
 /**
- * Expand two padded domains so that `leftOrigin` and `rightOrigin` map to the
- * same pixel fraction.  This keeps e.g. index=100 and returns=0 on the same
- * horizontal line regardless of how far each series has drifted.
- *
- * Algorithm: the ratio above/below the origin must be equal for both axes.
- * We take r = max(lAbove/lBelow, rAbove/rBelow) then expand the "tight" side
- * of each axis so that r is satisfied without shrinking any natural data range.
+ * Like `niceStep` but always rounds UP to ensure `intervals × result ≥ span`.
+ * Used to build a right-axis domain that covers the data in exactly N_intervals
+ * nice-step intervals so right axis labels are always round numbers.
  */
-function alignOriginDomains(
-  leftDomain: [number, number], leftOrigin: number,
-  rightDomain: [number, number], rightOrigin: number,
-): { left: [number, number]; right: [number, number] } {
-  const eps = 1e-10
-  const lAbove = leftDomain[1] - leftOrigin
-  const lBelow = leftOrigin - leftDomain[0]
-  const rAbove = rightDomain[1] - rightOrigin
-  const rBelow = rightOrigin - rightDomain[0]
-  const r = Math.max(lAbove / Math.max(lBelow, eps), rAbove / Math.max(rBelow, eps))
-  return {
-    left: [leftOrigin - Math.max(lBelow, lAbove / Math.max(r, eps)), leftOrigin + Math.max(lAbove, r * lBelow)],
-    right: [rightOrigin - Math.max(rBelow, rAbove / Math.max(r, eps)), rightOrigin + Math.max(rAbove, r * rBelow)],
+function niceStepCovering(span: number, intervals: number): number {
+  if (intervals <= 0 || span <= 0) return 1
+  const rawStep = span / intervals
+  const mag = 10 ** Math.floor(Math.log10(rawStep))
+  const norm = rawStep / mag
+  if (norm <= 1) return 1 * mag
+  if (norm <= 2) return 2 * mag
+  if (norm <= 5) return 5 * mag
+  return 10 * mag
+}
+
+/**
+ * Compute a right-axis domain whose tick values at each left grid-line pixel
+ * are guaranteed to be "nice" round numbers.
+ *
+ * Strategy: count the left tick intervals (N), choose a nice step S for the
+ * right data range so that N×S ≥ data span, then snap the domain start to a
+ * multiple of S.  The series scale adapts — it may appear zoomed in or out
+ * relative to a naive fit — but every axis label is a clean round value.
+ *
+ * For drawdown data (always ≤ 0) pass `anchorTop = true` to pin the top of
+ * the domain at 0 instead of snapping the bottom.
+ */
+function niceRightDomain(
+  rightNat: [number, number],
+  leftDomain: [number, number],
+  leftOrigin: number,
+  numTicks = 4,
+  anchorTop = false,
+): [number, number] {
+  const leftTicks = originAlignedYTicks(leftDomain, leftOrigin, numTicks)
+  const N = Math.max(leftTicks.length - 1, 1)
+  const [D_min, D_max] = rightNat
+  const span = D_max - D_min || Math.abs(D_max) || 1
+  const S = niceStepCovering(span, N)
+  if (anchorTop) {
+    // Top is fixed at 0; grow downward by N nice steps
+    return [-(N * S), 0]
   }
+  const start = Math.floor(D_min / S) * S
+  return [start, start + N * S]
 }
 
 // ─── BaseDatePicker helpers ────────────────────────────────────────────────────
@@ -701,6 +737,10 @@ export function GraphTab(): JSX.Element {
 
   const [showTooltip, setShowTooltip] = useState(true)
 
+  // true  = y-axis fits to the visible x-window (normal scroll zoom)
+  // false = y-axis spans the full data range   (alt+scroll or no zoom)
+  const [yFitToZoom, setYFitToZoom] = useState(false)
+
   // ── Export dropdown ───────────────────────────────────────────────────────
   const [exportOpen, setExportOpen] = useState(false)
   const exportRef = useRef<HTMLDivElement>(null)
@@ -927,6 +967,25 @@ export function GraphTab(): JSX.Element {
   const displaySeries = useMemo(() => {
     if (activeSeries.length === 0) return activeSeries
 
+    // When alwaysCommonDates is on, compute the earliest date that exists in
+    // every visible series.  Transform groups that have no explicit user base
+    // date will rebase at this date so the index starts at 100 at the left
+    // edge of the displayed chart.
+    let commonBaseFallback = ''
+    if (alwaysCommonDates) {
+      const visible = activeSeries.filter(s => s.visible !== false)
+      if (visible.length > 1) {
+        const sets = visible.map(s =>
+          new Set(s.originalPoints.map(p => p.date.getTime())),
+        )
+        const common = [...sets[0]].filter(t => sets.every(set => set.has(t)))
+        common.sort((a, b) => a - b)
+        if (common.length > 0) {
+          commonBaseFallback = new Date(common[0]).toISOString().slice(0, 10)
+        }
+      }
+    }
+
     // Group by transform type
     const raw: DataSeries[] = []
     const levelCumGroups = new Map<string, DataSeries[]>()   // key = cumBaseInput (level series)
@@ -953,24 +1012,35 @@ export function GraphTab(): JSX.Element {
     // Apply level index per group (reconstruct levels → normalise to 100)
     const levelCumResults: DataSeries[] = []
     for (const [baseInput, group] of levelCumGroups) {
-      levelCumResults.push(...applyLevelIndex(group, baseInput))
+      const effectiveBase = baseInput || commonBaseFallback
+      levelCumResults.push(...applyLevelIndex(group, effectiveBase))
     }
 
     // Apply growth cumulative returns per group (independent intersection dates)
     const cumResults: DataSeries[] = []
     for (const [key, group] of growthCumGroups) {
       const [method, baseInput] = key.split(':') as [CumMethod, string]
-      cumResults.push(...applyCumulativeReturns(group, method, baseInput))
+      const effectiveBase = baseInput || commonBaseFallback
+      cumResults.push(...applyCumulativeReturns(group, method, effectiveBase))
     }
 
     // Apply drawdown (independent intersection dates within dd group)
     const ddResults = ddSeries.length > 0 ? applyDrawdown(ddSeries) : []
 
-    // Merge back in original order
+    // Merge back in original order, then apply any per-series time shift
     const resultMap = new Map<string, DataSeries>()
     for (const s of [...raw, ...levelCumResults, ...cumResults, ...ddResults]) resultMap.set(s.id, s)
-    return activeSeries.map(s => resultMap.get(s.id) ?? s)
-  }, [activeSeries])
+    return activeSeries.map(s => {
+      const transformed = resultMap.get(s.id) ?? s
+      if (!transformed.timeShift) return transformed
+      const shiftedPoints = computeTimeShift(transformed.points, transformed.timeShift, transformed.data_freq)
+      const newMAs = (transformed.movingAverages ?? []).map(ma => ({
+        ...ma,
+        points: computeMA(shiftedPoints, ma.type, ma.window),
+      }))
+      return { ...transformed, points: shiftedPoints, movingAverages: newMAs }
+    })
+  }, [activeSeries, alwaysCommonDates])
 
   const visibleSeries = useMemo(() => displaySeries.filter(s => s.visible !== false), [displaySeries])
   const pivoted = useMemo(() => pivotSeries(visibleSeries, alwaysCommonDates), [visibleSeries, alwaysCommonDates])
@@ -1022,8 +1092,11 @@ export function GraphTab(): JSX.Element {
     const leftSeries = visibleSeries.filter(s => seriesAxisSide(s.transform ?? 'returns') === 'left')
     const rightSeries = visibleSeries.filter(s => seriesAxisSide(s.transform ?? 'returns') === 'right')
 
-    const leftNat = naturalDomain(leftSeries)
-    const rightNat = rightSeries.length > 0 ? naturalDomain(rightSeries) : null
+    // When yFitToZoom is on, restrict domain to the visible x-window only.
+    const filter = (yFitToZoom && zoomDomain) ? zoomDomain : null
+
+    const leftNat = naturalDomain(leftSeries, 0.1, filter)
+    const rightNat = rightSeries.length > 0 ? naturalDomain(rightSeries, 0.1, filter) : null
 
     if (!leftNat) return { yDomainLeft: undefined, yDomainRight: undefined }
 
@@ -1034,20 +1107,23 @@ export function GraphTab(): JSX.Element {
     }
 
     if (rightAxisMode === 'returns' && rightNat) {
-      // Index (left) + Returns (right): align their origins so index=100 and returns=0 share a pixel
-      const { left, right } = alignOriginDomains(leftNat, 100, rightNat, 0)
-      return { yDomainLeft: left, yDomainRight: right }
+      // Index (left) + Returns (right): compute a nice right domain with the same
+      // number of intervals as the left axis so labels are always round numbers.
+      const leftOrigin = 100
+      const rightDomain = niceRightDomain(rightNat, leftNat, leftOrigin)
+      return { yDomainLeft: leftNat, yDomainRight: rightDomain }
     }
 
     if (rightAxisMode === 'drawdown' && rightNat) {
-      // Index/Returns (left) + Drawdown (right, top 30%)
-      const ddSpan = Math.abs(rightNat[0]) || 100
-      const ddDomain: [number, number] = [rightNat[0] - ddSpan * 0.1, 0]
+      // Index/Returns (left) + Drawdown (right, top 30%).
+      // Anchor the top at 0 and grow downward in nice steps matching the left interval count.
+      const leftOrigin = leftAxisMode === 'index' ? 100 : 0
+      const ddDomain = niceRightDomain(rightNat, leftNat, leftOrigin, 4, true)
       return { yDomainLeft: leftNat, yDomainRight: ddDomain }
     }
 
     return { yDomainLeft: leftNat, yDomainRight: undefined }
-  }, [visibleSeries, leftAxisMode, rightAxisMode, seriesAxisSide])
+  }, [visibleSeries, leftAxisMode, rightAxisMode, seriesAxisSide, yFitToZoom, zoomDomain])
 
   // Build a lookup from data-key (series code or __ma__<id>) to display info
   // so the ChartTooltip rows callback can resolve names, colours, and styles.
@@ -1272,7 +1348,7 @@ export function GraphTab(): JSX.Element {
   const [isZooming, setIsZooming] = useState(false)
   const zoomEndTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
   // rAF batching: collapse burst wheel events into one update per paint frame.
-  const pendingWheelRef  = useRef<{ deltaX: number; deltaY: number; clientX: number; ctrlKey: boolean } | null>(null)
+  const pendingWheelRef  = useRef<{ deltaX: number; deltaY: number; clientX: number; ctrlKey: boolean; altKey: boolean } | null>(null)
   const wheelRafRef      = useRef<number | null>(null)
   // Ref to the header row (buttons + date) used to align the left-mode edit panel.
   const stateRef = useRef({ pivoted, zoomDomain, activeSeries, ...pivotBounds, panelOpen })
@@ -1322,7 +1398,9 @@ export function GraphTab(): JSX.Element {
         return
       }
 
-      // ── Vertical scroll -> zoom ─────────────────────────────────────────────────
+      // ── Vertical scroll -> zoom x-axis ─────────────────────────────────────────
+      // Normal scroll: zoom x + fit y to visible window.
+      // Alt+scroll:    zoom x only, y stays locked to full data range.
       const factor   = Math.exp(ev.deltaY * 0.003)
       const newRange = Math.min(totalMax - totalMin, Math.max(minRange, range * factor))
 
@@ -1338,6 +1416,7 @@ export function GraphTab(): JSX.Element {
       if (newEnd   > totalMax) { newEnd = totalMax; newStart = Math.max(totalMin, totalMax - newRange) }
 
       setZoomDomain({ start: new Date(newStart), end: new Date(newEnd) })
+      setYFitToZoom(!ev.altKey)
 
       setIsZooming(true)
       if (zoomEndTimerRef.current) clearTimeout(zoomEndTimerRef.current)
@@ -1356,7 +1435,7 @@ export function GraphTab(): JSX.Element {
         if (outsideChart) return
       }
       e.preventDefault()
-      pendingWheelRef.current = { deltaX: e.deltaX, deltaY: e.deltaY, clientX: e.clientX, ctrlKey: e.ctrlKey }
+      pendingWheelRef.current = { deltaX: e.deltaX, deltaY: e.deltaY, clientX: e.clientX, ctrlKey: e.ctrlKey, altKey: e.altKey }
       if (wheelRafRef.current === null) {
         wheelRafRef.current = requestAnimationFrame(processWheel)
       }
@@ -1367,7 +1446,7 @@ export function GraphTab(): JSX.Element {
       el.removeEventListener('wheel', handler)
       if (wheelRafRef.current !== null) cancelAnimationFrame(wheelRafRef.current)
     }
-  }, [setZoomDomain, setChartMaxWidth])
+  }, [setZoomDomain, setChartMaxWidth, setYFitToZoom])
 
   // ── Pan (left-click drag) ─────────────────────────────────────────────────────
   // timeDelta = dx * timePerPixel (positive = dragging right = view shifts left/earlier).
@@ -1401,14 +1480,16 @@ export function GraphTab(): JSX.Element {
   const handleSelectionComplete = useCallback(
     (startDate: Date, endDate: Date): void => {
       setZoomDomain({ start: startDate, end: endDate })
+      setYFitToZoom(true)
     },
-    [setZoomDomain],
+    [setZoomDomain, setYFitToZoom],
   )
 
-  // Double-click on the chart area resets zoom to full range
+  // Double-click on the chart area resets zoom to full range (y unlocks too)
   const handleDoubleClick = useCallback((): void => {
     setZoomDomain(null)
-  }, [setZoomDomain])
+    setYFitToZoom(false)
+  }, [setZoomDomain, setYFitToZoom])
 
   // Right-click on chart opens a context menu; crosshair stays frozen (area-chart internal ref)
   const handleRightClickPoint = useCallback(
@@ -1614,12 +1695,12 @@ export function GraphTab(): JSX.Element {
                   <XAxis />
                   <YAxis
                     origin={leftAxisMode === 'index' ? 100 : 0}
-                    formatValue={leftAxisMode !== 'index' ? (v) => `${v.toFixed(1)}%` : undefined}
+                    formatValue={leftAxisMode !== 'index' ? (v) => `${Number.isInteger(v) ? v : v.toFixed(1)}%` : undefined}
                   />
                   {hasRightAxis && (
                     <YAxisRight
                       leftOrigin={leftAxisMode === 'index' ? 100 : 0}
-                      formatValue={(v) => `${v.toFixed(1)}%`}
+                      formatValue={(v) => `${Number.isInteger(v) ? v : v.toFixed(1)}%`}
                     />
                   )}
                   <Crosshair skipAnimation={isZooming} />
@@ -1802,7 +1883,14 @@ export function GraphTab(): JSX.Element {
                             }
                           />
                         </svg>
-                        <span className="text-foreground font-medium">{s.name}</span>
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-foreground font-medium">{s.name}</span>
+                          {s.timeShift != null && s.timeShift !== 0 && (
+                            <span className="text-[10px] text-muted-foreground/60 leading-tight">
+                              {s.timeShift > 0 ? `Shifted +${s.timeShift} periods` : `Shifted ${s.timeShift} periods`}
+                            </span>
+                          )}
+                        </div>
                         {/* Transform badge — shown whenever any mix of transforms is present */}
                         {isMixed && (
                           <span className="px-1 py-0.5 rounded text-[10px] font-semibold leading-none bg-muted text-muted-foreground">
@@ -1903,6 +1991,7 @@ export function GraphTab(): JSX.Element {
                           })}
                         </div>
                       )}
+
                     </motion.li>
                   )
                 })}

@@ -408,6 +408,9 @@ export function SeriesEditPanel({ series, placement, activeTab, onTabChange, onC
   const addMADecHandlers = usePressAndHold(() => setMAWindow(w => Math.max(2, w - 1)))
   const addMAIncHandlers = usePressAndHold(() => setMAWindow(w => Math.min(series.points.length, w + 1)))
 
+  const tsDecHandlers = usePressAndHold(() => onUpdate({ timeShift: (series.timeShift ?? 0) - 1 }))
+  const tsIncHandlers = usePressAndHold(() => onUpdate({ timeShift: (series.timeShift ?? 0) + 1 }))
+
   const colorPalette   = useAppStore(s => s.colorPalette)
   const customPalettes = useAppStore(s => s.customPalettes)
   const theme          = useAppStore(s => s.theme)
@@ -416,7 +419,7 @@ export function SeriesEditPanel({ series, placement, activeTab, onTabChange, onC
   const allPalettes    = getAllPalettes(customPalettes, isDarkTheme(theme), uiTheme)
   const paletteColors  = allPalettes[colorPalette] ?? Object.values(allPalettes)[0]
   const panelRef       = useRef<HTMLDivElement>(null)
-  const existingMAs    = series.movingAverages ?? []
+  const existingMAs = series.movingAverages ?? []
 
   const currentLineStyle = series.lineStyle ?? 'solid'
   const currentLineWidth = series.lineWidth ?? 2
@@ -439,6 +442,7 @@ export function SeriesEditPanel({ series, placement, activeTab, onTabChange, onC
     onUpdate({ movingAverages: [...existingMAs, newMA] })
     setAddingMA(false)
   }
+
 
   return (
     <motion.div
@@ -870,6 +874,69 @@ export function SeriesEditPanel({ series, placement, activeTab, onTabChange, onC
             >
               <Plus className="h-3.5 w-3.5" />
               Add Moving Average
+            </button>
+          )}
+
+          {/* ── Time Shift ────────────────────────────────────────────────── */}
+          {/* Single time shift — shifts the series itself N periods along x. */}
+          {series.timeShift != null ? (
+            <section className="space-y-2 rounded-lg border border-border/50 p-3.5">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+                Time Shift
+              </p>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center shrink-0" title={freqUnit(series.data_freq)}>
+                  <button
+                    type="button"
+                    aria-label="Decrease periods"
+                    disabled={series.timeShift <= -(series.points.length - 1)}
+                    className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-25 disabled:cursor-not-allowed"
+                    {...tsDecHandlers}
+                  >
+                    <ChevronDown className="h-3 w-3" />
+                  </button>
+                  <input
+                    type="number"
+                    value={series.timeShift}
+                    onChange={e => onUpdate({ timeShift: parseInt(e.target.value) || 0 })}
+                    className="w-8 h-5 text-center text-xs tabular-nums bg-transparent border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded [appearance:textfield] [&::-webkit-inner-spin-button]:hidden [&::-webkit-outer-spin-button]:hidden"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Increase periods"
+                    disabled={series.timeShift >= series.points.length - 1}
+                    className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-25 disabled:cursor-not-allowed"
+                    {...tsIncHandlers}
+                  >
+                    <ChevronUp className="h-3 w-3" />
+                  </button>
+                </div>
+                <span className="text-xs text-muted-foreground flex-1">{freqUnit(series.data_freq)}</span>
+                <button
+                  type="button"
+                  aria-label="Remove time shift"
+                  onClick={() => onUpdate({ timeShift: undefined })}
+                  className="text-muted-foreground/40 hover:text-destructive transition-colors"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground/50 leading-relaxed">
+                {(series.timeShift ?? 0) > 0
+                  ? `Series shifted ${series.timeShift} period${series.timeShift !== 1 ? 's' : ''} forward in time.`
+                  : (series.timeShift ?? 0) < 0
+                  ? `Series shifted ${Math.abs(series.timeShift ?? 0)} period${Math.abs(series.timeShift ?? 0) !== 1 ? 's' : ''} backward in time.`
+                  : 'A shift of 0 is identical to the original.'}
+              </p>
+            </section>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onUpdate({ timeShift: 1 })}
+              className="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border/60 px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add Time Shift
             </button>
           )}
 

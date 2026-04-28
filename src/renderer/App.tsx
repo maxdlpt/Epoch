@@ -7,6 +7,7 @@ import { DBTab } from "./components/tabs/DBTab"
 import { NewGraphTab } from "./components/tabs/NewGraphTab"
 import { useAppStore } from "./store/app"
 import { useGraphStore } from "./store/graph"
+import { useGraphManagerStore } from "./store/graph-manager"
 import { getColor } from "./lib/colors"
 import { applyTheme, applyUiTheme, isDarkTheme } from "./lib/theme"
 import { useHydrateSettings } from "./hooks/useHydrateSettings"
@@ -17,6 +18,7 @@ import { useSessionPersistence } from "./hooks/useSessionPersistence"
 
 export default function App() {
   const activeTab        = useAppStore(s => s.activeTab)
+  const activeGraphId    = useGraphManagerStore(s => s.activeGraphId)
   const colorPalette     = useAppStore(s => s.colorPalette)
   const customPalettes   = useAppStore(s => s.customPalettes)
   const theme            = useAppStore(s => s.theme)
@@ -42,11 +44,11 @@ export default function App() {
     activeSeries.forEach((s, i) => {
       updateSeries(s.id, { color: getColor(colorPalette, s.colorIndex ?? i, customPalettes, dark, uiTheme) })
     })
-  }, [colorPalette, customPalettes, theme, uiTheme, settingsHydrated])
+  }, [colorPalette, customPalettes, theme, uiTheme, settingsHydrated, activeGraphId])
 
   return (
     <AppLayout>
-      {activeTab === 'graph' && <GraphTab />}
+      {activeTab === 'graph' && <GraphTab key={activeGraphId ?? 'no-graph'} />}
       {activeTab === 'new-graph' && <NewGraphTab />}
       {activeTab === 'upload' && <UploadTab />}
       {activeTab === 'settings' && <SettingsTab />}

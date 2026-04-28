@@ -1,4 +1,4 @@
-import type { DataPoint } from '../../shared/types'
+import type { DataFreq, DataPoint } from '../../shared/types'
 
 /**
  * Rolling (trailing) MA: each output point is the mean of the preceding
@@ -36,6 +36,47 @@ export function computeCenteredMA(points: DataPoint[], window: number): DataPoin
     result.push({ date: points[i].date, value: sum / window })
   }
   return result
+}
+
+/**
+ * Add N calendar periods to a UTC date, respecting the series frequency.
+ * Monthly/quarterly/yearly use setUTCMonth/setUTCFullYear so months with
+ * different lengths don't drift.  Daily adds calendar days.
+ * When freq is unknown, falls back to the median inter-point gap.
+ */
+function shiftDate(date: Date, n: number, freq: DataFreq | undefined): Date {
+  const d = new Date(date)
+  switch (freq) {
+    case 'yearly':
+      d.setUTCFullYear(d.getUTCFullYear() + n)
+      break
+    case 'quarterly':
+      d.setUTCMonth(d.getUTCMonth() + n * 3)
+      break
+    case 'monthly':
+      d.setUTCMonth(d.getUTCMonth() + n)
+      break
+    case 'daily':
+      d.setUTCDate(d.getUTCDate() + n)
+      break
+    default:
+      // Unknown freq: use median inter-point gap as one "period"
+      break
+  }
+  return d
+}
+
+/**
+ * Time-shift a series by N periods along the x-axis.
+ *
+ * Every date is moved forward (positive N) or backward (negative N) by
+ * N calendar periods, determined by the series frequency.  All values are
+ * preserved and the series length stays the same — both the start date and
+ * the end date shift by the same amount.
+ */
+export function computeTimeShift(points: DataPoint[], n: number, freq?: DataFreq): DataPoint[] {
+  if (points.length === 0 || n === 0) return points.map(p => ({ ...p }))
+  return points.map(p => ({ date: shiftDate(p.date, n, freq), value: p.value }))
 }
 
 /**
