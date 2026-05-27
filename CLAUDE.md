@@ -1,4 +1,4 @@
-# TimeSeriesVisualiser — CLAUDE.md
+# Epoch — CLAUDE.md
 
 Electron desktop app for visualising, uploading, and sharing time-series data. FRED-inspired charting with SQLite storage. Built by Maximilien Delaporte.
 
@@ -57,7 +57,7 @@ npm run build:win && npx electron-builder --publish always
 This builds the Windows installer and uploads it (plus a `latest.yml` metadata file) to GitHub Releases.
 
 **Step 5 — Confirm:**
-Check that the release appeared at `https://github.com/maxdlpt/TimeSeriesVisualiser/releases`. The user's boss will receive the update automatically on next app launch.
+Check that the release appeared at `https://github.com/maxdlpt/Epoch/releases`. The user's boss will receive the update automatically on next app launch.
 
 ### What each piece does:
 - `electron-builder.yml` — `publish: provider: github` tells the builder where to upload

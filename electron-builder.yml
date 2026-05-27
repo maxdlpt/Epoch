@@ -44,6 +44,6 @@ npmRebuild: false
 publish:
   provider: github
   owner: maxdlpt
-  repo: TimeSeriesVisualiser
+  repo: Epoch
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

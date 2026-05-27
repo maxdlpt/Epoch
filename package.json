@@ -1,5 +1,5 @@
 {
-  "name": "time-series-visualiser",
+  "name": "epoch",
   "version": "1.1.7",
   "description": "Time Series Visualiser — Electron desktop app for visualising, uploading, and sharing time-series data",
   "main": "./out/main/index.js",

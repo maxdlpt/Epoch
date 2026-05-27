@@ -44,6 +44,7 @@ export function UploadTab(): JSX.Element {
   const [inputMode, setInputMode] = useState<InputMode>('file')
   const [phase, setPhase]         = useState<Phase>('input')
   const [pendingSeries, setPendingSeries] = useState<DataSeries[]>([])
+  const [pendingGrid, setPendingGrid]     = useState<string[][] | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const colorPalette      = useAppStore((s) => s.colorPalette)
@@ -80,9 +81,17 @@ export function UploadTab(): JSX.Element {
     [colorPalette, customPalettes, theme, uiTheme, activeSeriesCount],
   )
 
+  // Dateless path: raw grid from PasteTable (no date column in pasted data)
+  const handleRawGrid = useCallback((grid: string[][]) => {
+    setPendingGrid(grid)
+    setPendingSeries([])
+    setPhase('table')
+  }, [])
+
   // Reset to initial input phase
   const handleCancel = useCallback(() => {
     setPendingSeries([])
+    setPendingGrid(null)
     setSaveError(null)
     setPhase('input')
   }, [])
@@ -173,7 +182,7 @@ export function UploadTab(): JSX.Element {
           {inputMode === 'file' ? (
             <FileDropZone onSeries={handleParsed} />
           ) : (
-            <PasteTable onSeries={handleParsed} />
+            <PasteTable onSeries={handleParsed} onRawGrid={handleRawGrid} />
           )}
         </>
       )}
@@ -181,6 +190,7 @@ export function UploadTab(): JSX.Element {
       {phase === 'table' && (
         <UploadTablePage
           series={pendingSeries}
+          initialGrid={pendingGrid ?? undefined}
           onDone={handleTableDone}
           onCancel={handleCancel}
         />

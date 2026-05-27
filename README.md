@@ -1,4 +1,4 @@
-# TimeSeriesVisualiser
+# Epoch
 
 A FRED-inspired Electron desktop application for visualising, uploading, and managing time-series data with SQLite storage. Built for financial data analysis with multi-source database support.
 
@@ -29,7 +29,7 @@ A FRED-inspired Electron desktop application for visualising, uploading, and man
 
 ## Overview
 
-TimeSeriesVisualiser is an Electron app with a React renderer that lets you:
+Epoch is an Electron app with a React renderer that lets you:
 
 1. **Upload** time-series data from CSV, Excel, or clipboard paste
 2. **Visualise** multiple series on an interactive chart with zoom, pan, and crosshair

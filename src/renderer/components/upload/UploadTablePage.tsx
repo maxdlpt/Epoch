@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef, useMemo } from 'react'
-import { Check, Plus } from 'lucide-react'
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
+import { Check, Plus, X } from 'lucide-react'
 import { parseCSVText, parseClipboardHtml, parseExcelBuffer } from '../../lib/parse'
 import { ipc } from '../../lib/ipc'
 import type { DataSeries } from '../../../shared/types'
@@ -10,6 +10,7 @@ type Grid = string[][]
 
 interface Props {
   series: DataSeries[]
+  initialGrid?: string[][]
   onDone: (series: DataSeries[]) => void
   onCancel: () => void
 }
@@ -28,6 +29,18 @@ function fmtDateDisplay(d: Date): string {
   return `${day} ${mon} ${year}`
 }
 
+/**
+ * Normalise any parseable date string to the "dd mmm yyyy" display format.
+ * Returns the original string if it can't be parsed as a date.
+ */
+function normalizeDateDisplay(s: string): string {
+  const t = s.trim()
+  if (!t) return s
+  const d = new Date(t)
+  if (!isNaN(d.getTime())) return fmtDateDisplay(d)
+  return s
+}
+
 /** Parse "dd mmm yyyy" back to a sortable YYYY-MM-DD key. */
 function displayDateToKey(s: string): string {
   const parts = s.trim().split(/\s+/)
@@ -43,15 +56,22 @@ function displayDateToKey(s: string): string {
  * Format a value cell for display: "2.12345%" → " 2.12 %"
  * Negatives use accounting-style parentheses: "-1.50%" → "(1.50)%"
  * Positive values are padded so the decimal point aligns with negatives.
+ *
+ * Also handles bare numeric strings from the IPC clipboard (e.g. scientific
+ * notation like "-1.0500000000000001E-2"): values with |n| ≤ 1 are treated
+ * as decimal fractions and multiplied by 100 before display.
  */
 function displayPct(raw: string): string {
-  if (raw.endsWith('%')) {
-    const n = parseFloat(raw.slice(0, -1))
+  const withPct = raw.endsWith('%')
+  const numStr  = withPct ? raw.slice(0, -1) : raw.trim()
+  if (numStr !== '') {
+    const n = parseFloat(numStr)
     if (!isNaN(n)) {
-      if (n < 0) return `(${Math.abs(n).toFixed(2)})%`
-      // Pad with a leading space to match the '(' width on negatives,
-      // and a trailing space to match the ')'.
-      return `\u2007${n.toFixed(2)}\u2007%`
+      // Already-percentage values (with '%') are used as-is.
+      // Bare decimal fractions (|n| ≤ 1, no '%') are scaled ×100.
+      const pct = withPct || Math.abs(n) > 1 ? n : n * 100
+      if (pct < 0) return `(${Math.abs(pct).toFixed(2)})%`
+      return `\u2007${pct.toFixed(2)}\u2007%`
     }
   }
   return raw
@@ -215,16 +235,29 @@ function mergeDateAligned(
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function UploadTablePage({ series, onDone, onCancel }: Props) {
-  // Build grid from series + 1 empty column for pasting
+export function UploadTablePage({ series, initialGrid, onDone, onCancel }: Props) {
+  // Build grid from initialGrid (dateless path) or series + 1 empty column for pasting
   const [grid, setGrid] = useState<Grid>(() => {
+    if (initialGrid && initialGrid.length > 0) {
+      const stripped = stripTrailingEmpty(initialGrid)
+      return padGrid(stripped, stripped[0].length + 1)
+    }
     const base = seriesToGrid(series)
     return padGrid(base, base[0].length + 1)
   })
 
   const tableRef = useRef<HTMLTableElement>(null)
   const addMoreRef = useRef<HTMLInputElement>(null)
-  const [focusedCell, setFocusedCell] = useState<string | null>(null)
+  const [focusedCell, setFocusedCell]       = useState<string | null>(null)
+  const [dateError, setDateError]           = useState<string | null>(null)
+  const [hoveredHeaderCol, setHoveredHeaderCol] = useState<number | null>(null)
+
+  // Auto-clear date error once all date cells are filled
+  useEffect(() => {
+    if (dateError && grid.slice(1).every((row) => (row[0] ?? '').trim() !== '')) {
+      setDateError(null)
+    }
+  }, [grid, dateError])
 
   const updateCell = useCallback((ri: number, ci: number, value: string) => {
     setGrid((prev) => {
@@ -234,92 +267,139 @@ export function UploadTablePage({ series, onDone, onCancel }: Props) {
     })
   }, [])
 
-  // Paste handler: if pasting into the empty column area, expand the grid
+  // Feature 3: remove a series column by index
+  const removeColumn = useCallback((ci: number) => {
+    setHoveredHeaderCol(null)
+    setGrid((prev) => {
+      const next = prev.map((row) => [...row.slice(0, ci), ...row.slice(ci + 1)])
+      const maxCols = Math.max(...next.map((r) => r.length))
+      // Re-ensure exactly 1 trailing empty column
+      const hasEmptyTrailing = next[0].some(
+        (_, i) => i > 0 && next.every((r) => (r[i] ?? '').trim() === ''),
+      )
+      return hasEmptyTrailing ? next : padGrid(next, maxCols + 1)
+    })
+  }, [])
+
+  // Paste handler — three branches, tried in order:
+  //
+  //   1. parsePastedGrid succeeds (data has a date column + values) → column-merge.
+  //      Handles ALL multi-series-with-dates pastes regardless of which cell is focused.
+  //   2. No dates detected + focused on trailing empty-col header → content-based append.
+  //      Detects whether row 0 is a title row and positions values accordingly.
+  //   3. No dates + any other cell → distribute downward from focused cell.
+  //      Used for pasting titles, dates, or value ranges at a specific row.
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent) => {
-      // Intercept paste if the grid has any empty column (the "paste here" slot)
-      const hasEmptyCol = grid[0].some((_, ci) =>
-        ci > 0 && grid.every((row) => (row[ci] ?? '').trim() === ''))
-      if (!hasEmptyCol) return
+      const targetCol = parseInt((e.currentTarget as HTMLInputElement).getAttribute('data-col') ?? '-1')
+      const targetRow = parseInt((e.currentTarget as HTMLInputElement).getAttribute('data-row') ?? '-1')
+
+      if (targetCol < 0 || targetRow < 0) return
+      // "Date" header is read-only
+      if (targetRow === 0 && targetCol === 0) return
 
       e.preventDefault()
       e.stopPropagation()
 
-      // Extract what we can from the web clipboard API (synchronous, before event expires)
+      // ── Gather clipboard data ─────────────────────────────────────────────────
+      // Capture synchronous data BEFORE any await (browser may discard the
+      // clipboard event after the first suspension point).
       let htmlGrid: Grid | null = null
       const html = e.clipboardData.getData('text/html')
       if (html) {
         const parsed = parseClipboardHtml(html)
         if (parsed && parsed.length > 0) htmlGrid = parsed
       }
+      const textFallback = e.clipboardData.getData('text/plain')
       let textGrid: Grid | null = null
-      const text = e.clipboardData.getData('text/plain')
-      if (text.trim()) {
-        textGrid = text.trim().split(/\r?\n/).map((row) => row.split('\t'))
+      if (textFallback.trim()) {
+        textGrid = textFallback.trim().split(/\r?\n/).map((row) => row.split('\t'))
       }
 
-      // Also try main-process clipboard (reads binary Excel formats — full untruncated data)
+      // Prefer IPC clipboard: reads binary Excel format for ISO dates and full
+      // numeric precision, avoiding display-formatted strings like "Jan-24".
       let ipcGrid: Grid | null = null
       try { ipcGrid = await ipc.clipboard.readSpreadsheet() } catch { /* IPC unavailable */ }
 
-      // Pick the grid with the most rows
       const candidates = [ipcGrid, htmlGrid, textGrid].filter(
         (g): g is Grid => g != null && g.length > 0,
       )
       if (candidates.length === 0) return
       const pastedGrid = candidates.reduce((best, g) => g.length > best.length ? g : best)
 
-      // Run pasted data through the SAME parseCSVText pipeline that PasteTable uses.
-      // This handles date disambiguation, value conversion, and data-type detection.
-      const parsed = parsePastedGrid(pastedGrid)
-
-      if (parsed && parsed.length > 0) {
-        // parseCSVText succeeded — date-aligned merge via seriesToGrid
-        const newGrid = seriesToGrid(parsed)
+      // ── Branch 1: structured data with dates → column-merge ──────────────────
+      // Always try first, regardless of which cell is focused, so multi-series
+      // pastes work whether the user clicked on the empty column header or not.
+      const parsedSeries = parsePastedGrid(pastedGrid)
+      if (parsedSeries && parsedSeries.length > 0) {
+        const newGrid = seriesToGrid(parsedSeries)
         setGrid((prev) => mergeDateAligned(prev, newGrid))
         return
       }
 
-      // parseCSVText failed (e.g., single column of values, no date column).
-      // Fall back to row-index insertion.
-      const dataRowCount = grid.length - 1
-      const pastedHasHeader = pastedGrid.length === dataRowCount + 1
-      const pastedIsValuesOnly =
-        pastedGrid.length === dataRowCount ||
-        pastedGrid.length === dataRowCount + 1
+      // ── Branch 2: no dates, focused on trailing empty col header → append ────
+      const isTrailingEmptyHeader =
+        targetRow === 0 &&
+        targetCol > 0 &&
+        grid.every((row) => (row[targetCol] ?? '').trim() === '')
 
-      setGrid((prev) => {
-        const clean = stripTrailingEmpty(prev)
-        const next = clean.map((r) => [...r])
-        const insertAt = next[0].length // append at end
+      if (isTrailingEmptyHeader) {
+        const firstRowHasTitle = pastedGrid[0].some((cell) => {
+          const t = cell.trim()
+          return t !== '' && isNaN(parseFloat(t))
+        })
 
-        if (pastedIsValuesOnly) {
-          const pastedCols = pastedGrid![0].length
-          for (let r = 0; r < next.length; r++) {
-            const pastedRow = pastedHasHeader
-              ? pastedGrid![r]
-              : r === 0
-                ? Array(pastedCols).fill('')
-                : pastedGrid![r - 1]
-            if (pastedRow) next[r].push(...pastedRow)
-          }
-        } else {
-          const pastedCols = Math.max(...pastedGrid!.map((r) => r.length))
-          for (let r = 0; r < Math.max(next.length, pastedGrid!.length); r++) {
-            if (r >= next.length) {
-              const newRow = Array(insertAt).fill('')
-              newRow.push(...(pastedGrid![r] ?? []))
-              while (newRow.length < insertAt + pastedCols) newRow.push('')
-              next.push(newRow)
+        const headerCells = firstRowHasTitle ? pastedGrid[0] : pastedGrid[0].map(() => '')
+        const valueRows   = firstRowHasTitle ? pastedGrid.slice(1) : pastedGrid
+        const pastedCols  = Math.max(...pastedGrid.map((r) => r.length), 1)
+
+        setGrid((prev) => {
+          const clean    = stripTrailingEmpty(prev)
+          const next     = clean.map((r) => [...r])
+          const insertAt = next[0].length
+
+          const paddedHeader = [...headerCells]
+          while (paddedHeader.length < pastedCols) paddedHeader.push('')
+          next[0].push(...paddedHeader)
+
+          const totalDataRows = Math.max(next.length - 1, valueRows.length)
+          for (let i = 0; i < totalDataRows; i++) {
+            const ri  = i + 1
+            const src = valueRows[i] ?? []
+            const vals = [...src]
+            while (vals.length < pastedCols) vals.push('')
+            if (ri < next.length) {
+              next[ri].push(...vals)
             } else {
-              next[r].push(...(pastedGrid![r] ?? Array(pastedCols).fill('')))
+              const newRow = Array(insertAt).fill('')
+              newRow.push(...vals)
+              next.push(newRow)
             }
           }
-        }
 
-        // Ensure exactly 1 trailing empty column
-        const maxCols = Math.max(...next.map((r) => r.length))
-        return padGrid(next, maxCols + 1)
+          const maxCols = Math.max(...next.map((r) => r.length))
+          return padGrid(next, maxCols + 1)
+        })
+        return
+      }
+
+      // ── Branch 3: distribute downward from focused cell ──────────────────────
+      setGrid((prev) => {
+        const next = prev.map((r) => [...r])
+        for (let ri = 0; ri < pastedGrid.length; ri++) {
+          const gridRow = targetRow + ri
+          if (gridRow >= next.length) break
+          for (let ci2 = 0; ci2 < pastedGrid[ri].length; ci2++) {
+            const gridCol = targetCol + ci2
+            if (gridCol >= next[0].length) break
+            const val = pastedGrid[ri][ci2]
+            // Normalise date column to consistent "dd mmm yyyy" display format
+            next[gridRow][gridCol] = gridRow > 0 && gridCol === 0
+              ? normalizeDateDisplay(val)
+              : val
+          }
+        }
+        return next
       })
     },
     [grid],
@@ -352,6 +432,13 @@ export function UploadTablePage({ series, onDone, onCancel }: Props) {
 
   // "Done" — re-parse the grid into series
   const handleDone = useCallback(() => {
+    // Feature 1: require all date cells to be filled
+    const emptyDates = grid.slice(1).some((row) => (row[0] ?? '').trim() === '')
+    if (emptyDates) {
+      setDateError('Paste dates into the date column before continuing.')
+      return
+    }
+
     // Strip trailing empty columns before parsing
     const trimmed = grid.map((row) => {
       let end = row.length
@@ -360,7 +447,12 @@ export function UploadTablePage({ series, onDone, onCancel }: Props) {
     })
     const csv = gridToCSV(trimmed)
     const parsed = parseCSVText(csv)
-    if (parsed.length > 0) onDone(parsed)
+    if (parsed.length > 0) {
+      setDateError(null)
+      onDone(parsed)
+    } else {
+      setDateError('Could not parse the dates. Check that the date column contains valid date values.')
+    }
   }, [grid, onDone])
 
   const handleCellKeyDown = useCallback(
@@ -452,6 +544,9 @@ export function UploadTablePage({ series, onDone, onCancel }: Props) {
           />
         </div>
         <div className="flex items-center gap-2">
+          {dateError && (
+            <span className="text-xs text-amber-500">{dateError}</span>
+          )}
           <button
             type="button"
             onClick={onCancel}
@@ -506,17 +601,25 @@ export function UploadTablePage({ series, onDone, onCancel }: Props) {
                     displayVal = displayPct(cell)
                   }
 
+                  // Feature 3: show X button on hoverable header columns
+                  const canDelete = isHeader && !isDateCol && !empty
+                  const showDeleteBtn = canDelete && hoveredHeaderCol === ci
+
                   return (
                     <td
                       key={ci}
+                      onMouseEnter={canDelete ? () => setHoveredHeaderCol(ci) : undefined}
+                      onMouseLeave={canDelete ? () => setHoveredHeaderCol(null) : undefined}
                       className={[
-                        'border border-border p-0',
+                        'border border-border p-0 relative',
                         isHeader ? 'bg-muted' : '',
                         isDateCol && !isHeader ? 'bg-muted/30' : '',
                         empty && !isHeader ? 'bg-primary/[0.02] border-dashed' : '',
                       ].join(' ')}
                     >
                       <input
+                        data-col={ci}
+                        data-row={ri}
                         value={displayVal}
                         onChange={(e) => {
                           // Don't allow editing the forced "Date" header
@@ -534,7 +637,8 @@ export function UploadTablePage({ series, onDone, onCancel }: Props) {
                             : undefined
                         }
                         className={[
-                          'w-full px-2 py-1 text-center',
+                          'w-full py-1 text-center',
+                          showDeleteBtn ? 'pl-2 pr-5' : 'px-2',
                           isHeader ? 'bg-muted' : 'bg-transparent',
                           'focus:outline-none focus:bg-primary/5',
                           isHeader
@@ -549,6 +653,15 @@ export function UploadTablePage({ series, onDone, onCancel }: Props) {
                         ].join(' ')}
                         title={isHeader && !isDateCol ? cell : undefined}
                       />
+                      {showDeleteBtn && (
+                        <button
+                          type="button"
+                          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); removeColumn(ci) }}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 z-20 flex items-center justify-center h-4 w-4 rounded-full bg-destructive/10 hover:bg-destructive text-destructive hover:text-destructive-foreground transition-colors"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      )}
                     </td>
                   )
                 })}

@@ -5,6 +5,7 @@ import type { DataSeries } from '../../../shared/types'
 
 interface Props {
   onSeries: (series: DataSeries[]) => void
+  onRawGrid?: (grid: string[][]) => void
 }
 
 type Grid = string[][]
@@ -29,6 +30,49 @@ function forwardGrid(grid: Grid, onSeries: (s: DataSeries[]) => void): boolean {
   return false
 }
 
+/** True if any cell in the grid contains a numeric value (possible dateless series). */
+function hasNumericData(grid: Grid): boolean {
+  return grid.some((row) =>
+    row.some((cell) => {
+      const t = cell.trim().replace(/%$/, '')
+      return t !== '' && !isNaN(parseFloat(t))
+    }),
+  )
+}
+
+/**
+ * Build an initial table grid from pasted data that has no date column.
+ * Row 0: ['Date', ...headers or empty strings]
+ * Rows 1+: ['', ...values]
+ */
+function buildDatelessGrid(pastedGrid: Grid): Grid | null {
+  if (pastedGrid.length === 0 || !hasNumericData(pastedGrid)) return null
+
+  const numCols = Math.max(...pastedGrid.map((r) => r.length))
+
+  // First row is a header if ALL its non-empty cells are non-numeric
+  const firstRowIsHeader = pastedGrid[0].every((cell) => {
+    const t = cell.trim()
+    return t === '' || isNaN(parseFloat(t))
+  })
+
+  const headerCells = firstRowIsHeader ? pastedGrid[0] : Array(numCols).fill('')
+  const dataRows    = firstRowIsHeader ? pastedGrid.slice(1) : pastedGrid
+
+  if (dataRows.length === 0) return null
+
+  const header: string[] = ['Date', ...headerCells]
+  const rows: Grid = [header]
+
+  for (const row of dataRows) {
+    const padded = [...row]
+    while (padded.length < numCols) padded.push('')
+    rows.push(['', ...padded])
+  }
+
+  return rows
+}
+
 /**
  * Read spreadsheet data from the OS clipboard via the main process.
  * Retries up to 3 times with increasing delays (the clipboard may be
@@ -46,13 +90,23 @@ async function readClipboardWithRetry(): Promise<Grid | null> {
   return null
 }
 
-export function PasteTable({ onSeries }: Props) {
+export function PasteTable({ onSeries, onRawGrid }: Props) {
   const zoneRef = useRef<HTMLDivElement>(null)
   const [parseError, setParseError] = useState<string | null>(null)
 
   useEffect(() => {
     zoneRef.current?.focus()
   }, [])
+
+  const tryProcess = useCallback((grid: Grid): boolean => {
+    if (forwardGrid(grid, onSeries)) return true
+    const raw = buildDatelessGrid(grid)
+    if (raw && onRawGrid) {
+      onRawGrid(raw)
+      return true
+    }
+    return false
+  }, [onSeries, onRawGrid])
 
   // Both Ctrl+V and button use the same IPC path — the main process reads
   // unsanitized HTML from the OS clipboard (preserving Excel's x:num attributes
@@ -68,10 +122,10 @@ export function PasteTable({ onSeries }: Props) {
       return
     }
 
-    if (!forwardGrid(grid, onSeries)) {
-      setParseError('No valid series found. Ensure the first column contains dates and other columns contain numbers.')
+    if (!tryProcess(grid)) {
+      setParseError('No valid series found. Ensure data contains numbers, or include a date column as the first column.')
     }
-  }, [onSeries])
+  }, [tryProcess])
 
   const handleClipboardButton = useCallback(async () => {
     setParseError(null)
@@ -79,8 +133,8 @@ export function PasteTable({ onSeries }: Props) {
       const grid = await ipc.clipboard.readSpreadsheet()
 
       if (grid && grid.length > 0) {
-        if (forwardGrid(grid, onSeries)) return
-        setParseError('No valid series found. Ensure the first column contains dates and other columns contain numbers.')
+        if (tryProcess(grid)) return
+        setParseError('No valid series found. Ensure data contains numbers, or include a date column as the first column.')
         return
       }
 
@@ -88,7 +142,7 @@ export function PasteTable({ onSeries }: Props) {
     } catch {
       setParseError('Clipboard access denied. Use Ctrl+V to paste instead.')
     }
-  }, [onSeries])
+  }, [tryProcess])
 
   return (
     <div
@@ -103,7 +157,9 @@ export function PasteTable({ onSeries }: Props) {
       ].join(' ')}
     >
       <p className="font-medium">Paste your data here (Ctrl+V)</p>
-      <p className="text-xs">First row = headers (date, series1, series2…). First column = dates.</p>
+      <p className="text-xs text-center">
+        First row = headers · First column = dates (optional — you can add dates on the next screen)
+      </p>
       <button
         type="button"
         onClick={handleClipboardButton}
