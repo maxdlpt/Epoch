@@ -22,6 +22,20 @@ function parseValue(raw: string): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * Format a decimal-form value for display: 0.052 → " 5.20 %"
+ * Negatives use accounting-style parentheses: -0.015 → "(1.50)%"
+ */
+function displayPct(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed === '') return raw
+  const n = parseFloat(trimmed)
+  if (isNaN(n)) return raw
+  const pct = n * 100
+  if (pct < 0) return `(${Math.abs(pct).toFixed(2)})%`
+  return `\u2007${pct.toFixed(2)}\u2007%`
+}
+
 // ─── EditableHeader ───────────────────────────────────────────────────────────
 
 interface EditableHeaderProps {
@@ -788,18 +802,18 @@ export function DataTable({ records, dbPath, dbId, filter }: DataTableProps) {
                   {allSeries.map((s, colIdx) => {
                     const isSelected = sel?.rowIdx === rowIdx && sel?.colIdx === colIdx
                     const isEditing  = isSelected && editMode
-                    const display    = getCellDisplay(s.id, date)
+                    const rawDisplay = getCellDisplay(s.id, date)
                     const dirty      = edits[s.id]?.[date] !== undefined
 
                     return (
                       <Cell
                         key={s.id}
-                        displayValue={display}
+                        displayValue={displayPct(rawDisplay)}
                         dirty={dirty}
                         selected={isSelected}
                         inRange={isInRange(rowIdx, colIdx)}
                         editing={isEditing}
-                        editValue={isEditing ? editValue : display}
+                        editValue={isEditing ? editValue : rawDisplay}
                         inputRef={inputRef}
                         rowIdx={rowIdx}
                         colIdx={colIdx}

@@ -196,7 +196,7 @@ export function detectDataType(points: DataPoint[]): DataType {
  * Converts N level data points into N growth rate points.
  *
  * growthPoints[0]  = { date: d₀, value: 0 }                (sentinel — no prior period)
- * growthPoints[i]  = { date: dᵢ, value: (valᵢ − valᵢ₋₁) / |valᵢ₋₁| × 100 }
+ * growthPoints[i]  = { date: dᵢ, value: (valᵢ − valᵢ₋₁) / |valᵢ₋₁| }   (decimal form)
  * startingValue    = points[0].value                         (original first price)
  */
 export function toGrowthRates(points: DataPoint[]): { growthPoints: DataPoint[]; startingValue: number } {
@@ -205,7 +205,7 @@ export function toGrowthRates(points: DataPoint[]): { growthPoints: DataPoint[];
     { date: points[0].date, value: 0 },
     ...points.slice(1).map((p, i) => ({
       date: p.date,
-      value: ((p.value - points[i].value) / Math.abs(points[i].value)) * 100,
+      value: (p.value - points[i].value) / Math.abs(points[i].value),
     })),
   ]
   return { growthPoints, startingValue }
@@ -295,13 +295,13 @@ export function parseCSVText(csvText: string): DataSeries[] {
       ...cleanNumericRich(row[col] ?? ''),
     }))
 
-    // Per-cell format: if the cell had a %, the number is already in percent
-    // form (e.g. "1.13%" → 1.13).  If no %, treat as decimal fraction and ×100
-    // (e.g. "0.0113" → 1.13).
+    // All values stored in decimal form (0.052 = +5.2%).
+    // If the cell had "%", divide the numeric part by 100 (e.g. "5.2%" → 0.052).
+    // Bare decimals are already in the right form (e.g. "0.052" stays 0.052).
     const rawPoints = richCells
       .map((c) => ({
         date: c.date,
-        value: c.hasPct ? c.value : c.value * 100,
+        value: c.hasPct ? c.value / 100 : c.value,
       }))
       .filter((p) => !isNaN(p.date.getTime()) && !isNaN(p.value))
 

@@ -161,7 +161,7 @@ function fmtDate(d: Date): string {
 }
 
 function fmtValue(v: number): string {
-  return `${v.toFixed(2)}%`
+  return `${(v * 100).toFixed(2)}%`
 }
 
 function DataPreview({ series }: { series: DataSeries }) {

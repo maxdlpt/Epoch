@@ -3,7 +3,7 @@ import type { DataPoint } from '../../shared/types'
 export function toCumReturn(pts: DataPoint[]): DataPoint[] {
   if (pts.length === 0) return []
   const base = pts[0].value
-  return pts.map(p => ({ date: p.date, value: ((p.value - base) / base) * 100 }))
+  return pts.map(p => ({ date: p.date, value: (p.value - base) / base }))
 }
 
 export function toNormalized(pts: DataPoint[]): DataPoint[] {
@@ -14,15 +14,15 @@ export function toNormalized(pts: DataPoint[]): DataPoint[] {
 
 /**
  * Geometric compounding index anchored at 100.
- * Treats each data point value as a period return in percentage terms
- * (e.g. 5.2 → +5.2%).  The first point is always pinned to 100; each
- * subsequent point is t_{i-1} × (1 + value_i / 100).
+ * Treats each data point value as a period return in decimal form
+ * (e.g. 0.052 → +5.2%).  The first point is always pinned to 100; each
+ * subsequent point is t_{i-1} × (1 + value_i).
  */
 export function toGeomIndex(pts: DataPoint[]): DataPoint[] {
   if (pts.length === 0) return []
   let level = 100
   return pts.map((p, i) => {
-    if (i > 0) level = level * (1 + p.value / 100)
+    if (i > 0) level = level * (1 + p.value)
     return { date: p.date, value: level }
   })
 }
@@ -36,7 +36,7 @@ export function toDrawdown(pts: DataPoint[]): DataPoint[] {
   let peak = -Infinity
   return pts.map(p => {
     if (p.value > peak) peak = p.value
-    return { date: p.date, value: ((p.value - peak) / peak) * 100 }
+    return { date: p.date, value: (p.value - peak) / peak }
   })
 }
 
@@ -45,13 +45,13 @@ export function toDrawdown(pts: DataPoint[]): DataPoint[] {
  * growth-rate points and the original first price (startingValue).
  *
  * points[0] is the 0-sentinel → value₀ = startingValue
- * points[i] carries a % return  → valueᵢ = (1 + gᵢ/100) × valueᵢ₋₁
+ * points[i] carries a decimal return  → valueᵢ = (1 + gᵢ) × valueᵢ₋₁
  */
 export function reconstructLevels(pts: DataPoint[], startingValue: number): DataPoint[] {
   if (pts.length === 0) return []
   let level = startingValue
   return pts.map((p, i) => {
-    if (i > 0) level = level * (1 + p.value / 100)
+    if (i > 0) level = level * (1 + p.value)
     return { date: p.date, value: level }
   })
 }
@@ -84,6 +84,6 @@ export function toPctChange(pts: DataPoint[]): DataPoint[] {
   return pts.map((p, i) => {
     if (i === 0) return { date: p.date, value: 0 }
     const prev = pts[i - 1].value
-    return { date: p.date, value: ((p.value - prev) / Math.abs(prev)) * 100 }
+    return { date: p.date, value: (p.value - prev) / Math.abs(prev) }
   })
 }

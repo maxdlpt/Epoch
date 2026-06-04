@@ -46,9 +46,9 @@ describe('OperationsPanel', () => {
     await user.click(screen.getByRole('button', { name: /cumulative return/i }))
 
     const after = useGraphStore.getState().activeSeries[0]
-    // base 100 -> 0%, second point 110 -> 10%
+    // base 100 -> 0, second point 110 -> 0.10 (decimal form)
     expect(after.points[0].value).toBe(0)
-    expect(after.points[1].value).toBeCloseTo(10)
+    expect(after.points[1].value).toBeCloseTo(0.10)
   })
 
   it('applying Normalize rebases series to 100', async () => {

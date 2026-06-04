@@ -9,10 +9,10 @@ const pts: DataPoint[] = [
 ]
 
 describe('transforms', () => {
-  it('toCumReturn: first point is 0, second is 10%', () => {
+  it('toCumReturn: first point is 0, second is 0.10 (10% in decimal)', () => {
     const out = toCumReturn(pts)
     expect(out[0].value).toBeCloseTo(0)
-    expect(out[1].value).toBeCloseTo(10)
+    expect(out[1].value).toBeCloseTo(0.10)
   })
 
   it('toNormalized: first point is 100', () => {
@@ -21,18 +21,18 @@ describe('transforms', () => {
     expect(out[1].value).toBeCloseTo(110)
   })
 
-  it('toPctChange: second point shows period % change', () => {
+  it('toPctChange: second point shows period change in decimal form', () => {
     const out = toPctChange(pts)
-    expect(out[1].value).toBeCloseTo(10)
+    expect(out[1].value).toBeCloseTo(0.10)
   })
 })
 
 // Growth-rate points that toGrowthRates would produce for [100, 110, 121]:
-// [0, +10%, +10%]
+// [0, +0.10, +0.10]  (decimal form: 0.10 = +10%)
 const growthPts: DataPoint[] = [
   { date: new Date('2020-01-01'), value: 0 },
-  { date: new Date('2020-02-01'), value: 10 },
-  { date: new Date('2020-03-01'), value: 10 },
+  { date: new Date('2020-02-01'), value: 0.10 },
+  { date: new Date('2020-03-01'), value: 0.10 },
 ]
 
 describe('reconstructLevels', () => {

@@ -2,34 +2,34 @@ import { describe, it, expect } from 'vitest'
 import { parseCSVText, detectDataType, toGrowthRates } from '../parse'
 
 describe('parseCSVText', () => {
-  it('parses simple date,value CSV with percent-signed growth data', () => {
-    // Cells with % keep their numeric value as-is (already in percent form)
+  it('parses percent-signed growth data into decimal form', () => {
+    // Cells with % are divided by 100: "2.5%" → 0.025
     const csv = `date,return\n2020-01-01,2.5%\n2020-02-01,3.1%`
     const series = parseCSVText(csv)
     expect(series).toHaveLength(1)
     expect(series[0].name).toBe('return')
     expect(series[0].points).toHaveLength(2)
-    expect(series[0].points[0].value).toBeCloseTo(2.5)
+    expect(series[0].points[0].value).toBeCloseTo(0.025)
   })
 
-  it('treats bare decimals as fractions and multiplies by 100', () => {
-    // Cells without % are decimal fractions: 0.025 → 2.5%, 0.031 → 3.1%
+  it('keeps bare decimals as-is (already in decimal form)', () => {
+    // Cells without % are already decimal fractions: 0.025 stays 0.025
     const csv = `date,return\n2020-01-01,0.025\n2020-02-01,0.031`
     const series = parseCSVText(csv)
     expect(series).toHaveLength(1)
-    expect(series[0].points[0].value).toBeCloseTo(2.5)
-    expect(series[0].points[1].value).toBeCloseTo(3.1)
+    expect(series[0].points[0].value).toBeCloseTo(0.025)
+    expect(series[0].points[1].value).toBeCloseTo(0.031)
   })
 
   it('converts level data (large positive magnitudes) to growth rates', () => {
-    // Values of 100/110 → ×100 → 10000/11000 → detected as level → growth rates
+    // Values of 100/110 — bare numbers, kept as-is → detected as level → growth rates in decimal form
     const csv = `date,price\n2020-01-01,100\n2020-02-01,110`
     const series = parseCSVText(csv)
     expect(series).toHaveLength(1)
     expect(series[0].dataType).toBe('level')
-    expect(series[0].startingValue).toBe(10000)
-    expect(series[0].points[0].value).toBe(0)        // sentinel
-    expect(series[0].points[1].value).toBeCloseTo(10) // +10%
+    expect(series[0].startingValue).toBe(100)
+    expect(series[0].points[0].value).toBe(0)           // sentinel
+    expect(series[0].points[1].value).toBeCloseTo(0.10)  // +10% in decimal
   })
 
   it('parses multi-series CSV', () => {
@@ -79,19 +79,19 @@ describe('detectDataType', () => {
   })
 
   it('returns growth when negFrac > 0.15', () => {
-    // 4 negative out of 20 = 0.2 → growth
-    const values = [...Array(16).fill(50), ...Array(4).fill(-1)]
+    // 4 negative out of 20 = 0.2 → growth (decimal-form returns)
+    const values = [...Array(16).fill(0.05), ...Array(4).fill(-0.01)]
     expect(detectDataType(pts(values))).toBe('growth')
   })
 
   it('returns level when nearly all positive and medianAbs > 20', () => {
-    // 0 negative, median = 100 → level
+    // 0 negative, median = 100 → level (price data)
     expect(detectDataType(pts([80, 90, 100, 110, 120]))).toBe('level')
   })
 
   it('returns growth when medianAbs ≤ 20 even with no negatives', () => {
-    // medianAbs = 5 (small returns like 5.0%) → growth
-    expect(detectDataType(pts([3, 4, 5, 6, 7]))).toBe('growth')
+    // medianAbs = 0.05 (small decimal returns) → growth
+    expect(detectDataType(pts([0.03, 0.04, 0.05, 0.06, 0.07]))).toBe('growth')
   })
 
   it('returns growth at the exact medianAbs = 20 boundary (not strictly greater)', () => {
@@ -122,22 +122,22 @@ describe('toGrowthRates', () => {
     expect(startingValue).toBe(250)
   })
 
-  it('computes percentage growth rates correctly', () => {
-    // 100 → 110 → 121: each step is +10%
+  it('computes growth rates in decimal form', () => {
+    // 100 → 110 → 121: each step is +10% = 0.10 in decimal
     const d = [new Date('2020-01-01'), new Date('2020-02-01'), new Date('2020-03-01')]
     const input = [{ date: d[0], value: 100 }, { date: d[1], value: 110 }, { date: d[2], value: 121 }]
     const { growthPoints } = toGrowthRates(input)
     expect(growthPoints).toHaveLength(3)
-    expect(growthPoints[1].value).toBeCloseTo(10, 10)
-    expect(growthPoints[2].value).toBeCloseTo(10, 10)
+    expect(growthPoints[1].value).toBeCloseTo(0.10, 10)
+    expect(growthPoints[2].value).toBeCloseTo(0.10, 10)
   })
 
   it('handles negative prior value with Math.abs denominator', () => {
-    // -100 → -80: change = +20 over |−100| = 20% recovery
+    // -100 → -80: change = +20 over |−100| = 0.20 in decimal
     const d = [new Date('2020-01-01'), new Date('2020-02-01')]
     const input = [{ date: d[0], value: -100 }, { date: d[1], value: -80 }]
     const { growthPoints } = toGrowthRates(input)
-    expect(growthPoints[1].value).toBeCloseTo(20, 10)
+    expect(growthPoints[1].value).toBeCloseTo(0.20, 10)
   })
 
   it('output has same length as input', () => {

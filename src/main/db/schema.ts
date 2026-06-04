@@ -34,4 +34,14 @@ export function initSchema(db: Database.Database): void {
   }
   addColumn(`ALTER TABLE series ADD COLUMN data_type     TEXT NOT NULL DEFAULT 'growth'`)
   addColumn(`ALTER TABLE series ADD COLUMN starting_value REAL`)
+
+  // ── v2 migration: percentage-form → decimal-form values ────────────────────
+  // Old format stored 5.2 for +5.2%; new format stores 0.052.
+  const version = db.pragma('user_version', { simple: true }) as number
+  if (version < 2) {
+    db.exec('UPDATE series_points SET value = value / 100.0')
+    // Clear stale session that still carries percentage-form values
+    db.exec(`DELETE FROM settings WHERE key = 'graph_session'`)
+    db.pragma('user_version = 2')
+  }
 }

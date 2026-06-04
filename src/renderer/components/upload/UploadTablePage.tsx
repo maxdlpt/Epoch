@@ -53,13 +53,9 @@ function displayDateToKey(s: string): string {
 }
 
 /**
- * Format a value cell for display: "2.12345%" → " 2.12 %"
- * Negatives use accounting-style parentheses: "-1.50%" → "(1.50)%"
- * Positive values are padded so the decimal point aligns with negatives.
- *
- * Also handles bare numeric strings from the IPC clipboard (e.g. scientific
- * notation like "-1.0500000000000001E-2"): values with |n| ≤ 1 are treated
- * as decimal fractions and multiplied by 100 before display.
+ * Format a value cell for display.
+ * Values in the grid carry a '%' suffix (e.g. "5.2%") from seriesToGrid.
+ * Strip the '%', parse, and format with accounting-style parentheses for negatives.
  */
 function displayPct(raw: string): string {
   const withPct = raw.endsWith('%')
@@ -67,11 +63,8 @@ function displayPct(raw: string): string {
   if (numStr !== '') {
     const n = parseFloat(numStr)
     if (!isNaN(n)) {
-      // Already-percentage values (with '%') are used as-is.
-      // Bare decimal fractions (|n| ≤ 1, no '%') are scaled ×100.
-      const pct = withPct || Math.abs(n) > 1 ? n : n * 100
-      if (pct < 0) return `(${Math.abs(pct).toFixed(2)})%`
-      return `\u2007${pct.toFixed(2)}\u2007%`
+      if (n < 0) return `(${Math.abs(n).toFixed(2)})%`
+      return `\u2007${n.toFixed(2)}\u2007%`
     }
   }
   return raw
@@ -100,12 +93,12 @@ function seriesToGrid(series: DataSeries[]): Grid {
   // Header row
   const header = ['date', ...series.map((s) => s.name)]
 
-  // Data rows — display-formatted dates and percentage values
+  // Data rows — display-formatted dates and percentage values (decimal → ×100 for display)
   const rows = sortedDates.map(([dateKey, dateObj]) => [
     fmtDateDisplay(dateObj),
     ...lookups.map((lk) => {
       const v = lk.get(dateKey)
-      return v != null ? `${v}%` : ''
+      return v != null ? `${v * 100}%` : ''
     }),
   ])
 

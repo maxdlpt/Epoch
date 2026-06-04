@@ -91,7 +91,7 @@ export function computeTimeShift(points: DataPoint[], n: number, freq?: DataFreq
  * At each point i, compounds the returns from i−window+1 through i:
  *   ((1 + r[i-N+1]/100) × … × (1 + r[i]/100) − 1) × 100
  *
- * Input values are assumed to be period returns in percent (e.g. 2.5 = +2.5%).
+ * Input values are assumed to be period returns in decimal form (e.g. 0.025 = +2.5%).
  * Output length: max(0, input.length − window + 1) — same trimming as rolling MA.
  */
 export function computeRollingCumReturn(points: DataPoint[], window: number): DataPoint[] {
@@ -99,8 +99,8 @@ export function computeRollingCumReturn(points: DataPoint[], window: number): Da
   const result: DataPoint[] = []
   for (let i = window - 1; i < points.length; i++) {
     let product = 1
-    for (let j = i - window + 1; j <= i; j++) product *= (1 + points[j].value / 100)
-    result.push({ date: points[i].date, value: (product - 1) * 100 })
+    for (let j = i - window + 1; j <= i; j++) product *= (1 + points[j].value)
+    result.push({ date: points[i].date, value: product - 1 })
   }
   return result
 }

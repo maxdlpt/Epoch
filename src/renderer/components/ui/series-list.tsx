@@ -1,8 +1,9 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { ArrowUpDown, ArrowUp, ArrowDown, Check, Plus, Trash2 } from 'lucide-react'
+import { ArrowUpDown, ArrowUp, ArrowDown, BarChart2, Check, Database, HardDrive, Plus, PlusCircle, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { inferFreqFromRecord, formatFreq } from '../../lib/freq'
 import { toGeomIndex } from '../../lib/transforms'
@@ -11,6 +12,8 @@ import { getColor } from '../../lib/colors'
 import { isDarkTheme } from '../../lib/theme'
 import { useAppStore } from '../../store/app'
 import { useGraphStore } from '../../store/graph'
+import { useGraphManagerStore } from '../../store/graph-manager'
+import { useDBStore } from '../../store/db'
 import { AreaChart, Area } from './area-chart'
 import type { DBRecord, DataFreq, DataSeries, DataType } from '../../../shared/types'
 
@@ -266,6 +269,9 @@ function RowActions({ record, dbPath, dbId, onDelete }: RowActionsProps) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [chartOpen, setChartOpen]         = useState(false)
   const dropdownRef                        = useRef<HTMLDivElement>(null)
+  const triggerRef                         = useRef<HTMLButtonElement>(null)
+  const portalRef                          = useRef<HTMLDivElement>(null)
+  const [menuPos, setMenuPos]             = useState({ top: 0, left: 0 })
 
   const colorPalette   = useAppStore((s) => s.colorPalette)
   const customPalettes = useAppStore((s) => s.customPalettes)
@@ -274,11 +280,19 @@ function RowActions({ record, dbPath, dbId, onDelete }: RowActionsProps) {
   const isDark         = isDarkTheme(theme)
   const addSeries      = useGraphStore((s) => s.addSeries)
   const activeCount    = useGraphStore((s) => s.activeSeries.length)
+  const activeGraphTitle = useGraphStore((s) => s.graphTitle)
+  const openGraphs     = useGraphManagerStore((s) => s.openGraphs)
+  const activeGraphId  = useGraphManagerStore((s) => s.activeGraphId)
+  const externalDBs    = useDBStore((s) => s.externalDBs)
 
   useEffect(() => {
     if (!chartOpen) return
     const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      const target = e.target as Node
+      if (
+        dropdownRef.current && !dropdownRef.current.contains(target) &&
+        portalRef.current && !portalRef.current.contains(target)
+      ) {
         setChartOpen(false)
       }
     }
@@ -286,16 +300,75 @@ function RowActions({ record, dbPath, dbId, onDelete }: RowActionsProps) {
     return () => document.removeEventListener('mousedown', handler)
   }, [chartOpen])
 
-  async function handleAddToChart() {
+  // Position the portalled dropdown below the trigger, right-aligned
+  useEffect(() => {
+    if (!chartOpen || !triggerRef.current) return
+    const rect = triggerRef.current.getBoundingClientRect()
+    setMenuPos({
+      top: rect.bottom + 4,
+      left: rect.right - 192, // 12rem = 192px (min-w-[12rem])
+    })
+  }, [chartOpen])
+
+  async function fetchSeries(): Promise<DataSeries | null> {
+    const fetcher = dbPath
+      ? ipc.external.getSeries(dbPath, record.id, dbId ?? record.id)
+      : ipc.memory.getSeries(record.id)
+    const series = await fetcher
+    if (!series) return null
+    const color = getColor(colorPalette, activeCount, customPalettes, isDark, uiTheme)
+    return { ...series, color }
+  }
+
+  async function handleAddToGraph(graphId?: string) {
+    setChartOpen(false)
+    const series = await fetchSeries()
+    if (!series) return
+    if (graphId && graphId !== activeGraphId) {
+      useGraphManagerStore.getState().switchGraph(graphId)
+    }
+    addSeries(series)
+  }
+
+  async function handleNewGraph() {
+    setChartOpen(false)
+    const series = await fetchSeries()
+    if (!series) return
+    useGraphManagerStore.getState().createGraph()
+    useGraphStore.getState().addSeries(series)
+  }
+
+  async function handleSaveToMemory() {
     setChartOpen(false)
     const fetcher = dbPath
       ? ipc.external.getSeries(dbPath, record.id, dbId ?? record.id)
       : ipc.memory.getSeries(record.id)
     const series = await fetcher
     if (!series) return
-    const color = getColor(colorPalette, activeCount, customPalettes, isDark, uiTheme)
-    addSeries({ ...series, color })
+    await ipc.memory.saveSeries(series)
   }
+
+  async function handleSaveToExternal(extPath: string) {
+    setChartOpen(false)
+    const fetcher = dbPath
+      ? ipc.external.getSeries(dbPath, record.id, dbId ?? record.id)
+      : ipc.memory.getSeries(record.id)
+    const series = await fetcher
+    if (!series) return
+    await ipc.external.saveSeries(extPath, series)
+  }
+
+  const graphOptions = openGraphs.map((g) => ({
+    id: g.id,
+    title:
+      g.id === activeGraphId
+        ? activeGraphTitle || 'New Graph'
+        : g.snapshot?.graphTitle || 'New Graph',
+    isActive: g.id === activeGraphId,
+  }))
+  const reachableDBs = externalDBs.filter((db) => db.reachable)
+  const isSourceMemory = !dbPath
+  const sourceDbId = dbId
 
   return (
     <div className="flex items-center justify-center gap-3">
@@ -342,54 +415,110 @@ function RowActions({ record, dbPath, dbId, onDelete }: RowActionsProps) {
         )}
       </AnimatePresence>
 
-      {/* Chart dropdown */}
-      <div ref={dropdownRef} className="relative">
+      {/* Add dropdown */}
+      <div ref={dropdownRef}>
         <button
+          ref={triggerRef}
           type="button"
           onClick={() => { setChartOpen((o) => !o); setConfirmDelete(false) }}
-          className="inline-flex items-center text-muted-foreground/40 hover:text-foreground transition-colors"
-          aria-label={`Add ${record.name} to chart`}
+          className="inline-flex items-center text-muted-foreground/40 hover:text-foreground transition-colors translate-y-0.5"
+          aria-label={`Add ${record.name}`}
         >
           <MiniLineChartIcon className="h-3.5 w-3.5" />
         </button>
 
-        <AnimatePresence>
-          {chartOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: -8, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.95 }}
-              transition={{ duration: 0.15, ease: 'easeOut' }}
-              className={cn(
-                'absolute top-[calc(100%+0.35rem)] right-0 z-50',
-                'overflow-hidden rounded-md min-w-[130px]',
-                'bg-muted',
-                'border-2 border-border',
-                'shadow-lg',
-              )}
-            >
+        {chartOpen && createPortal(
+          <div
+            ref={portalRef}
+            style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, zIndex: 9999 }}
+          >
+            <AnimatePresence>
               <motion.div
-                initial="hidden"
-                animate="visible"
-                variants={{ visible: { transition: { staggerChildren: 0.03 } } }}
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.1 }}
+                className="min-w-[12rem] rounded-lg overflow-hidden shadow-lg bg-card border border-border"
               >
-                <motion.button
-                  type="button"
-                  onClick={handleAddToChart}
-                  variants={{ hidden: { opacity: 0, x: -20 }, visible: { opacity: 1, x: 0 } }}
-                  className={cn(
-                    'w-full flex items-center gap-2 px-3 py-2 text-sm text-left whitespace-nowrap',
-                    'bg-card hover:bg-accent',
-                    'transition-colors duration-150',
-                  )}
+                <motion.div
+                  initial="hidden"
+                  animate="visible"
+                  variants={{ visible: { transition: { staggerChildren: 0.02 } } }}
                 >
-                  <MiniLineChartIcon className="h-3.5 w-3.5 shrink-0" />
-                  Add to chart
-                </motion.button>
+                  {/* Graphs */}
+                  <div className="px-3 pt-1.5 pb-0.5">
+                    <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Graph</span>
+                  </div>
+                  {graphOptions.map((g) => (
+                    <motion.button
+                      key={g.id}
+                      type="button"
+                      variants={{ hidden: { opacity: 0, x: -10 }, visible: { opacity: 1, x: 0 } }}
+                      onClick={() => handleAddToGraph(g.id)}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-accent transition-colors"
+                    >
+                      <BarChart2 className="h-3 w-3 shrink-0 text-primary" />
+                      <span className="flex-1 truncate">{g.title}</span>
+                      {g.isActive && <span className="text-[9px] text-muted-foreground/60">active</span>}
+                    </motion.button>
+                  ))}
+                  <motion.button
+                    type="button"
+                    variants={{ hidden: { opacity: 0, x: -10 }, visible: { opacity: 1, x: 0 } }}
+                    onClick={handleNewGraph}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-accent transition-colors"
+                  >
+                    <PlusCircle className="h-3 w-3 shrink-0 text-primary" />
+                    <span>New Graph</span>
+                  </motion.button>
+
+                  <div className="border-t border-border mt-0.5" />
+
+                  {/* Databases */}
+                  <div className="px-3 pt-1.5 pb-0.5">
+                    <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Database</span>
+                  </div>
+                  <motion.button
+                    type="button"
+                    disabled={isSourceMemory}
+                    variants={{ hidden: { opacity: 0, x: -10 }, visible: { opacity: 1, x: 0 } }}
+                    onClick={isSourceMemory ? undefined : handleSaveToMemory}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
+                      isSourceMemory ? 'opacity-40 cursor-default' : 'hover:bg-accent',
+                    )}
+                  >
+                    <HardDrive className="h-3 w-3 shrink-0 text-primary" />
+                    <span>Local Memory</span>
+                    {isSourceMemory && <Check className="h-3 w-3 shrink-0 ml-auto opacity-50" />}
+                  </motion.button>
+                  {reachableDBs.map((db) => {
+                    const isSource = db.id === sourceDbId
+                    return (
+                      <motion.button
+                        key={db.id}
+                        type="button"
+                        disabled={isSource}
+                        variants={{ hidden: { opacity: 0, x: -10 }, visible: { opacity: 1, x: 0 } }}
+                        onClick={isSource ? undefined : () => handleSaveToExternal(db.path)}
+                        className={cn(
+                          'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
+                          isSource ? 'opacity-40 cursor-default' : 'hover:bg-accent',
+                        )}
+                      >
+                        <Database className="h-3 w-3 shrink-0 opacity-60" />
+                        <span className="truncate">{db.name}</span>
+                        {isSource && <Check className="h-3 w-3 shrink-0 ml-auto opacity-50" />}
+                      </motion.button>
+                    )
+                  })}
+                  <div className="pb-0.5" />
+                </motion.div>
               </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            </AnimatePresence>
+          </div>,
+          document.body,
+        )}
       </div>
     </div>
   )

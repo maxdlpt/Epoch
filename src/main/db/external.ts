@@ -38,10 +38,33 @@ function findMissingTables(db: Database.Database): string[] {
   return REQUIRED_TABLES.filter((t) => !present.has(t))
 }
 
+/**
+ * Run the v2 decimal-form migration on an external DB if needed.
+ * Opens a writable connection, migrates, and closes — before the readonly reader opens.
+ */
+function migrateExternalIfNeeded(filePath: string): void {
+  let db: Database.Database | null = null
+  try {
+    db = new Database(filePath, { fileMustExist: true })
+    const version = db.pragma('user_version', { simple: true }) as number
+    if (version < 2) {
+      db.exec('UPDATE series_points SET value = value / 100.0')
+      db.exec(`DELETE FROM settings WHERE key = 'graph_session'`)
+      db.pragma('user_version = 2')
+    }
+  } catch {
+    /* If writable open fails (e.g. network share is readonly), skip — values read as-is */
+  } finally {
+    db?.close()
+  }
+}
+
 export class ExternalDBReader {
   private db: Database.Database
 
   constructor(filePath: string) {
+    // Migrate before opening readonly
+    migrateExternalIfNeeded(filePath)
     this.db = new Database(filePath, { readonly: true, fileMustExist: true })
     this.db.pragma('foreign_keys = ON')
     const missing = findMissingTables(this.db)

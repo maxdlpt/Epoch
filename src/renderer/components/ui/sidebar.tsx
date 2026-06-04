@@ -173,11 +173,16 @@ export const Sidebar = () => {
     if (openGraphs.length === 0) {
       setActiveTab('new-graph')
     } else {
-      // Navigate to the active graph (if not already there) AND toggle sub-tabs
       setActiveTab('graph')
-      toggleGraphsExpanded()
+      // If sidebar is collapsed, open it and expand the sub-tabs
+      if (!open) {
+        setOpen(true)
+        if (!graphsExpanded) toggleGraphsExpanded()
+      } else {
+        toggleGraphsExpanded()
+      }
     }
-  }, [openGraphs.length, setActiveTab, toggleGraphsExpanded])
+  }, [openGraphs.length, open, graphsExpanded, setActiveTab, toggleGraphsExpanded])
 
   const handleSubTabClick = useCallback((graphId: string) => {
     if (graphId !== activeGraphId) switchGraph(graphId)

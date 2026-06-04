@@ -161,7 +161,7 @@ function applyCumulativeReturns(
       const products: number[] = []
       let product = 1
       for (const p of filtered) {
-        product *= (1 + p.value / 100)
+        product *= (1 + p.value)
         products.push(product)
       }
       const baseProduct = products[baseIdx] ?? products[0]
@@ -174,7 +174,7 @@ function applyCumulativeReturns(
         sums.push(sum)
       }
       const baseSum = sums[baseIdx] ?? sums[0]
-      cumPoints = filtered.map((p, i) => ({ date: p.date, value: 100 + (sums[i] - baseSum) }))
+      cumPoints = filtered.map((p, i) => ({ date: p.date, value: 100 + (sums[i] - baseSum) * 100 }))
     }
 
     const newMAs = (s.movingAverages ?? []).map(ma => ({
@@ -269,15 +269,15 @@ function applyDrawdown(series: DataSeries[]): DataSeries[] {
     let wealth = 1
     const levels: number[] = []
     for (const p of filtered) {
-      wealth *= (1 + p.value / 100)
+      wealth *= (1 + p.value)
       levels.push(wealth)
     }
 
-    // Step 2 & 3: running peak → drawdown percentage
+    // Step 2 & 3: running peak → drawdown (decimal form, always ≤ 0)
     let peak = levels[0]
     const ddPoints: DataPoint[] = filtered.map((p, i) => {
       if (levels[i] > peak) peak = levels[i]
-      return { date: p.date, value: ((levels[i] - peak) / peak) * 100 }
+      return { date: p.date, value: (levels[i] - peak) / peak }
     })
 
     const newMAs = (s.movingAverages ?? []).map(ma => ({
@@ -1643,9 +1643,10 @@ export function GraphTab(): JSX.Element {
       const isCum = (seriesObj?.transform ?? 'returns') === 'cumulative'
       const suffix = isCum ? '' : '%'
       const decimals = isCum ? 1 : 2
-      const formatted = raw < 0
-        ? `(${Math.abs(raw).toFixed(decimals)}${suffix})`
-        : `${raw.toFixed(decimals)}${suffix}`
+      const displayVal = isCum ? raw : raw * 100
+      const formatted = displayVal < 0
+        ? `(${Math.abs(displayVal).toFixed(decimals)}${suffix})`
+        : `${displayVal.toFixed(decimals)}${suffix}`
       lines.push(`"${info.name}"\t${formatted}`)
     }
     navigator.clipboard.writeText(lines.join('\n')).catch(() => {})
@@ -1817,12 +1818,12 @@ export function GraphTab(): JSX.Element {
                   <XAxis />
                   <YAxis
                     origin={leftAxisMode === 'index' ? 100 : 0}
-                    formatValue={leftAxisMode !== 'index' ? (v) => `${Number.isInteger(v) ? v : v.toFixed(1)}%` : undefined}
+                    formatValue={leftAxisMode !== 'index' ? (v) => { const pct = v * 100; return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%` } : undefined}
                   />
                   {hasRightAxis && (
                     <YAxisRight
                       leftOrigin={leftAxisMode === 'index' ? 100 : 0}
-                      formatValue={(v) => `${Number.isInteger(v) ? v : v.toFixed(1)}%`}
+                      formatValue={(v) => { const pct = v * 100; return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%` }}
                     />
                   )}
                   <Crosshair skipAnimation={isZooming} />
@@ -1833,9 +1834,12 @@ export function GraphTab(): JSX.Element {
                       const fmtVal = (v: number | null, transform: SeriesTransform) => {
                         if (v === null) return '\u2013'
                         const isCum = transform === 'cumulative'
-                        const absStr = Math.abs(v).toFixed(isCum ? 1 : 2)
+                        // Cumulative/index values are 100-anchored → display as-is
+                        // Returns/drawdown are decimal → multiply by 100 for display
+                        const displayVal = isCum ? v : v * 100
+                        const absStr = Math.abs(displayVal).toFixed(isCum ? 1 : 2)
                         const suffix = isCum ? '' : '%'
-                        return v < 0 ? `(${absStr}${suffix})` : `${absStr}${suffix}`
+                        return displayVal < 0 ? `(${absStr}${suffix})` : `${absStr}${suffix}`
                       }
                       const renderLine = (dataKey: string, color: string, value: number | null) => {
                         const info = seriesInfoMap.get(dataKey)
