@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowUpRight, Check, ChevronDown, ChevronUp, Database, GripVertical, Plus, Save, X } from 'lucide-react'
 import { AnimatePresence, Reorder, motion, useDragControls } from 'motion/react'
+import { useDropdownKeyboard } from '../../hooks/useDropdownKeyboard'
 import { useAppStore } from '../../store/app'
 import { useDBStore } from '../../store/db'
 import { getAllPalettes } from '../../lib/colors'
@@ -105,6 +106,8 @@ function MAToast({ ma, seriesPoints, seriesFreq, onChange, onRemove, onPromote }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [typeOpen])
+  const closeTypeDD = useCallback(() => setTypeOpen(false), [])
+  useDropdownKeyboard(dropdownRef, typeOpen, closeTypeDD)
 
   function handleTypeChange(newType: 'rolling' | 'centered'): void {
     const pts = computeMA(seriesPoints, newType, ma.window)
@@ -282,6 +285,8 @@ function SaveDropdown({ selected, onToggle, externalDBs }: SaveDropdownProps) {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
+  const closeSaveDD = useCallback(() => setOpen(false), [])
+  useDropdownKeyboard(wrapperRef, open, closeSaveDD)
 
   const count = selected.size
   const label = count === 0 ? 'Choose destinations…' : `${count} selected`

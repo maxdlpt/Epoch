@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import { useDropdownKeyboard } from '../../hooks/useDropdownKeyboard'
 
 function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs))
@@ -41,6 +42,9 @@ export default function AnimatedDropdown<V extends string = string>({
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [isOpen])
+
+  const closeDropdown = useCallback(() => setIsOpen(false), [])
+  useDropdownKeyboard(wrapperRef, isOpen, closeDropdown)
 
   const selected = items.find((item) => item.value === value)
   const buttonLabel = selected?.label ?? text

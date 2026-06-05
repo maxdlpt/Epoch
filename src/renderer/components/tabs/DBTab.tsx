@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Check, ChevronDown, Database, FilePlus, FolderOpen, HardDrive, Plus, Save, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { createPortal } from 'react-dom'
+import { useDropdownKeyboard } from '../../hooks/useDropdownKeyboard'
 import { useDBStore } from '../../store/db'
 import { cn } from '../../lib/utils'
 import { inferFreqFromRecord, formatFreq } from '../../lib/freq'
@@ -123,6 +124,8 @@ function TitleDropdown({ selected, onSelect, externalDBs, onAddDB, onCreateDB }:
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
+  const closeTitleDD = useCallback(() => setOpen(false), [])
+  useDropdownKeyboard(wrapperRef, open, closeTitleDD)
 
   const handleSelect = (id: SelectedDB, reachable: boolean) => {
     if (!reachable) return
@@ -275,6 +278,8 @@ function SeriesDropdown({ selected, onSelect, records }: SeriesDropdownProps) {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
+  const closeSeriesDD = useCallback(() => setOpen(false), [])
+  useDropdownKeyboard(wrapperRef, open, closeSeriesDD)
 
   const label = selected === 'all'
     ? 'All'

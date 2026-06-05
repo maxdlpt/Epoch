@@ -3,12 +3,14 @@ import { useCallback, useState } from "react"
 import { createPortal } from "react-dom"
 import { Upload, Settings, Database, ChevronsRight, Plus, ChevronDown, X } from "lucide-react"
 import logoUrl from '../../assets/epoch_cyan1.png'
+import logoDarkUrl from '../../assets/epoch_cyan1_dark.png'
 import logoMarkUrl from '../../assets/e_cyan1.png'
 import { AnimatePresence, motion, Reorder } from "motion/react"
 import { useAppStore } from "../../store/app"
 import { useGraphStore } from "../../store/graph"
 import { useGraphManagerStore } from "../../store/graph-manager"
 import type { OpenGraph } from "../../store/graph-manager"
+import { isDarkTheme } from "../../lib/theme"
 import { ipc, serializeSeries } from "../../lib/ipc"
 import type { ReactNode } from "react"
 import type { SavedGraph } from "../../../shared/types"
@@ -27,7 +29,7 @@ function LineChartIcon({ className }: { className?: string }) {
   )
 }
 
-type Tab = 'graph' | 'upload' | 'settings' | 'db' | 'new-graph'
+type Tab = 'graph' | 'upload' | 'db' | 'new-graph'
 
 interface OptionProps {
   icon: ReactNode
@@ -146,12 +148,36 @@ function buildSavedGraphFromSnapshot(snapshot: NonNullable<OpenGraph['snapshot']
   }
 }
 
+// ── Settings toggle button ───────────────────────────────────────────────────
+
+function SettingsButton({ open }: { open: boolean }) {
+  const toggleSettings = useAppStore(s => s.toggleSettings)
+  const settingsOpen   = useAppStore(s => s.settingsOpen)
+  return (
+    <motion.button
+      layout
+      onClick={toggleSettings}
+      className={`relative flex h-11 w-full items-center rounded-md transition-colors duration-200 ${
+        settingsOpen
+          ? "bg-primary/10 text-primary shadow-sm border-l-2 border-primary"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground"
+      }`}
+      transition={{ layout: { duration: 0.25, ease: [0.4, 0, 0.2, 1] } }}
+    >
+      <div className="grid h-full w-12 place-content-center"><Settings className="h-4 w-4" /></div>
+      {open && <span className="text-sm font-medium">Settings</span>}
+    </motion.button>
+  )
+}
+
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 export const Sidebar = () => {
   const [open, setOpen] = useState(true)
   const activeTab = useAppStore(s => s.activeTab)
   const setActiveTab = useAppStore(s => s.setActiveTab)
+  const theme = useAppStore(s => s.theme)
+  const dark = isDarkTheme(theme)
 
   // Graph manager state
   const openGraphs = useGraphManagerStore(s => s.openGraphs)
@@ -255,7 +281,7 @@ export const Sidebar = () => {
       <div className="mb-6 border-b border-border pb-7">
         <div className="flex items-center justify-center px-0 py-0">
           <img
-            src={open ? logoUrl : logoMarkUrl}
+            src={open ? (dark ? logoDarkUrl : logoUrl) : logoMarkUrl}
             alt="Epoch"
             className={`object-contain transition-all duration-300 ${open ? 'h-[4.5rem] w-full' : 'h-[4.5rem] w-[4.5rem]'}`}
           />
@@ -357,7 +383,7 @@ export const Sidebar = () => {
 
       {/* Settings at bottom, above collapse */}
       <div className="space-y-1 border-t border-border pt-2 pb-[68px]">
-        <Option icon={<Settings className="h-4 w-4" />} title="Settings" tab="settings" selected={activeTab} open={open} onClick={handleNonGraphTabClick} />
+        <SettingsButton open={open} />
       </div>
 
       {/* Toggle collapse */}

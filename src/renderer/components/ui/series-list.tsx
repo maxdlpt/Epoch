@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { ArrowUpDown, ArrowUp, ArrowDown, BarChart2, Check, Database, HardDrive, Plus, PlusCircle, Trash2 } from 'lucide-react'
@@ -12,6 +12,7 @@ import { getColor } from '../../lib/colors'
 import { isDarkTheme } from '../../lib/theme'
 import { useAppStore } from '../../store/app'
 import { useGraphStore } from '../../store/graph'
+import { useDropdownKeyboard } from '../../hooks/useDropdownKeyboard'
 import { useGraphManagerStore } from '../../store/graph-manager'
 import { useDBStore } from '../../store/db'
 import { AreaChart, Area } from './area-chart'
@@ -299,6 +300,9 @@ function RowActions({ record, dbPath, dbId, onDelete }: RowActionsProps) {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [chartOpen])
+
+  const closeChart = useCallback(() => setChartOpen(false), [])
+  useDropdownKeyboard(portalRef, chartOpen, closeChart)
 
   // Position the portalled dropdown below the trigger, right-aligned
   useEffect(() => {

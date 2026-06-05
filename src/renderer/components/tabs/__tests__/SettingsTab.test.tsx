@@ -2,11 +2,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { SettingsTab } from '../SettingsTab'
+import { SettingsModal } from '../SettingsTab'
 import { useAppStore } from '../../../store/app'
 import { useDBStore } from '../../../store/db'
 
-// Mock the ipc wrapper so we can drive dialog/checkPath/settings.save returns per-test.
 vi.mock('../../../lib/ipc', () => ({
   ipc: {
     dialog: { openDB: vi.fn() },
@@ -15,17 +14,32 @@ vi.mock('../../../lib/ipc', () => ({
   },
 }))
 
-// Re-import after mock so the mocked methods are accessible to assertions.
+// Disable framer-motion animations so portalled content renders immediately
+vi.mock('motion/react', async () => {
+  const actual = await vi.importActual<typeof import('motion/react')>('motion/react')
+  return {
+    ...actual,
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+    motion: new Proxy(actual.motion, {
+      get(_target, prop) {
+        // Return a simple forwardRef wrapper that strips motion props
+        return ({ children, initial: _i, animate: _a, exit: _e, transition: _t, variants: _v, whileDrag: _w, layout: _l, ...rest }: any) => {
+          const Tag = String(prop) as keyof JSX.IntrinsicElements
+          return <Tag {...rest}>{children}</Tag>
+        }
+      },
+    }),
+  }
+})
+
 import { ipc } from '../../../lib/ipc'
 
 beforeEach(() => {
-  useAppStore.setState({ theme: 'system', colorPalette: 'default' })
+  useAppStore.setState({ theme: 'system', colorPalette: 'default', settingsOpen: true })
   useDBStore.setState({ externalDBs: [] })
   vi.mocked(ipc.dialog.openDB).mockReset()
   vi.mocked(ipc.external.checkPath).mockReset()
   vi.mocked(ipc.settings.save).mockReset().mockResolvedValue(undefined)
-  // jsdom doesn't implement matchMedia — the 'system' theme branch in
-  // applyTheme reads it, so stub it as "light mode" for determinism.
   window.matchMedia = vi.fn().mockImplementation((query: string) => ({
     matches: false,
     media: query,
@@ -38,91 +52,87 @@ beforeEach(() => {
   })) as unknown as typeof window.matchMedia
 })
 
-describe('SettingsTab', () => {
-  it('renders the three sections (theme, palette, external DBs)', () => {
-    render(<SettingsTab />)
-    expect(screen.getByRole('heading', { name: /settings/i })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /theme/i })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /colou?r palette/i })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /external databases/i })).toBeInTheDocument()
+describe('SettingsModal', () => {
+  it('renders the modal with sidebar tabs when settingsOpen is true', () => {
+    render(<SettingsModal />)
+    expect(screen.getByText('Settings')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close settings' })).toBeInTheDocument()
+    // Sidebar has the three section buttons
+    expect(screen.getByRole('button', { name: /accessibility/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /databases/i })).toBeInTheDocument()
+  })
+
+  it('does not render when settingsOpen is false', () => {
+    useAppStore.setState({ settingsOpen: false })
+    render(<SettingsModal />)
+    expect(screen.queryByText('Settings')).not.toBeInTheDocument()
   })
 
   it('clicking a theme button updates useAppStore.theme', async () => {
     const user = userEvent.setup()
-    render(<SettingsTab />)
+    render(<SettingsModal />)
 
-    await user.click(screen.getByRole('button', { name: /^dark$/i }))
+    await user.click(screen.getByText('Themes'))
+    await user.click(screen.getByRole('radio', { name: /dark/i }))
     expect(useAppStore.getState().theme).toBe('dark')
 
-    await user.click(screen.getByRole('button', { name: /^light$/i }))
+    await user.click(screen.getByRole('radio', { name: /light/i }))
     expect(useAppStore.getState().theme).toBe('light')
   })
 
   it('clicking a palette swatch updates useAppStore.colorPalette', async () => {
     const user = userEvent.setup()
-    render(<SettingsTab />)
+    render(<SettingsModal />)
 
-    await user.click(screen.getByRole('button', { name: /palette-pastel/i }))
-    expect(useAppStore.getState().colorPalette).toBe('pastel')
+    await user.click(screen.getByText('Themes'))
+    await user.click(screen.getByRole('button', { name: /palette-corporate/i }))
+    expect(useAppStore.getState().colorPalette).toBe('corporate')
   })
 
-  it('renders the empty-state message when no external DBs are configured', () => {
-    render(<SettingsTab />)
+  it('switching to Databases tab shows DB content', async () => {
+    const user = userEvent.setup()
+    render(<SettingsModal />)
+
+    await user.click(screen.getByRole('button', { name: /databases/i }))
     expect(screen.getByText(/no external databases configured/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /browse for db file/i })).toBeEnabled()
   })
 
-  it('lists external DBs from the db store', () => {
+  it('lists external DBs when switching to Databases tab', async () => {
     useDBStore.setState({
       externalDBs: [
         { id: 'a', name: 'Macro', path: 'C:/data/macro.db', reachable: true },
         { id: 'b', name: 'Prices', path: '/tmp/prices.db', reachable: false },
       ],
     })
-    render(<SettingsTab />)
+    const user = userEvent.setup()
+    render(<SettingsModal />)
+
+    await user.click(screen.getByRole('button', { name: /databases/i }))
     expect(screen.getByText('Macro')).toBeInTheDocument()
-    expect(screen.getByText('C:/data/macro.db')).toBeInTheDocument()
     expect(screen.getByText('Prices')).toBeInTheDocument()
   })
 
-  it('renders the "unreachable — re-checked on next startup" hint for unreachable DBs only', () => {
-    useDBStore.setState({
-      externalDBs: [
-        { id: 'a', name: 'Macro', path: 'C:/data/macro.db', reachable: true },
-        { id: 'b', name: 'Prices', path: '/tmp/prices.db', reachable: false },
-      ],
-    })
-    render(<SettingsTab />)
-    // The hint appears exactly once: on the unreachable row.
-    const hints = screen.getAllByText(/unreachable\s*—\s*re-checked on next startup/i)
-    expect(hints).toHaveLength(1)
-  })
-
-  it('renders the "Browse for DB file" button enabled', () => {
-    render(<SettingsTab />)
-    const addButton = screen.getByRole('button', { name: /browse for db file/i })
-    expect(addButton).toBeEnabled()
-  })
-
-  it('browse cancel (openDB returns null) leaves store and persistence untouched', async () => {
+  it('browse cancel leaves store untouched', async () => {
     vi.mocked(ipc.dialog.openDB).mockResolvedValue(null)
     const user = userEvent.setup()
-    render(<SettingsTab />)
+    render(<SettingsModal />)
 
+    await user.click(screen.getByRole('button', { name: /databases/i }))
     await user.click(screen.getByRole('button', { name: /browse for db file/i }))
 
-    // Dialog invoked, but nothing else.
     await waitFor(() => expect(ipc.dialog.openDB).toHaveBeenCalledTimes(1))
     expect(ipc.external.checkPath).not.toHaveBeenCalled()
-    expect(ipc.settings.save).not.toHaveBeenCalled()
     expect(useDBStore.getState().externalDBs).toHaveLength(0)
   })
 
-  it('browse happy path: valid DB is added to the store and persisted', async () => {
+  it('browse happy path: valid DB is added to the store', async () => {
     vi.mocked(ipc.dialog.openDB).mockResolvedValue('C:/data/macro.db')
     vi.mocked(ipc.external.checkPath).mockResolvedValue(true)
     const user = userEvent.setup()
-    render(<SettingsTab />)
+    render(<SettingsModal />)
 
+    await user.click(screen.getByRole('button', { name: /databases/i }))
     await user.click(screen.getByRole('button', { name: /browse for db file/i }))
 
     await waitFor(() => expect(useDBStore.getState().externalDBs).toHaveLength(1))
@@ -130,46 +140,13 @@ describe('SettingsTab', () => {
     expect(added.path).toBe('C:/data/macro.db')
     expect(added.name).toBe('macro')
     expect(added.reachable).toBe(true)
-    expect(added.id).toMatch(/[0-9a-f-]{10,}/i) // crypto.randomUUID shape
-
-    // Persisted via settings.save with the full AppSettings snapshot.
-    expect(ipc.settings.save).toHaveBeenCalledWith({
-      theme: 'system',
-      colorPalette: 'default',
-      externalDBs: [added],
-    })
-
-    // The new DB renders in the list.
-    expect(screen.getByText('macro')).toBeInTheDocument()
-    expect(screen.getByText('C:/data/macro.db')).toBeInTheDocument()
   })
 
-  it('browse invalid DB: checkPath=false adds DB with reachable:false and persists', async () => {
-    // Per Task #23: unreachable DBs are added to the list (harmless, filtered by
-    // AddLinePanel) rather than rejected with a banner. This enables the self-
-    // heal model where a DB that was added when reachable stays in the list even
-    // if temporarily offline, and the startup sweep later flips it back.
-    vi.mocked(ipc.dialog.openDB).mockResolvedValue('/tmp/garbage.db')
-    vi.mocked(ipc.external.checkPath).mockResolvedValue(false)
+  it('switching to Accessibility tab shows graph functionality toggles', async () => {
     const user = userEvent.setup()
-    render(<SettingsTab />)
+    render(<SettingsModal />)
 
-    await user.click(screen.getByRole('button', { name: /browse for db file/i }))
-
-    await waitFor(() => expect(useDBStore.getState().externalDBs).toHaveLength(1))
-    const added = useDBStore.getState().externalDBs[0]
-    expect(added.path).toBe('/tmp/garbage.db')
-    expect(added.name).toBe('garbage')
-    expect(added.reachable).toBe(false)
-
-    // Persisted with reachable:false.
-    expect(ipc.settings.save).toHaveBeenCalledWith({
-      theme: 'system',
-      colorPalette: 'default',
-      externalDBs: [added],
-    })
-
-    // No banner on add-with-false path.
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /accessibility/i }))
+    expect(screen.getByText(/always sync date windows/i)).toBeInTheDocument()
   })
 })

@@ -216,6 +216,19 @@ export interface SavedGraphMeta {
   seriesCount: number
 }
 
+/** Maps shortcut action IDs to their bound key (KeyboardEvent.key value). */
+export interface Keybindings {
+  toggleGrid: string
+  toggleTooltip: string
+  setAllReturns: string
+  setAllIndex: string
+  setAllDrawdown: string
+  saveGraph: string
+  addSeries: string
+  openSettings: string
+  exportGraph: string
+}
+
 export interface AppSettings {
   theme: 'light' | 'dark' | 'system'
   uiTheme?: string       // UI colour theme key (e.g. 'gold', 'ocean'); absent = 'original'
@@ -225,4 +238,5 @@ export interface AppSettings {
   externalDBs: ExternalDB[]
   /** When true, the chart only shows timestamps present in all visible series. Default false. */
   alwaysCommonDates?: boolean
+  keybindings?: Keybindings
 }

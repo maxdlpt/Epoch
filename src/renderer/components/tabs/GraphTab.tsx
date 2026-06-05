@@ -13,6 +13,8 @@ import { cn } from '../../lib/utils'
 import { ipc, serializeSeries } from '../../lib/ipc'
 import { computeMA, computeTimeShift } from '../../lib/ma'
 import { reconstructLevels, toLevelIndex } from '../../lib/transforms'
+import { matchesBinding } from '../../lib/keybindings'
+import { useDropdownKeyboard } from '../../hooks/useDropdownKeyboard'
 import type { DataFreq, DataSeries, DataPoint, SavedGraph, CumMethod, SeriesTransform } from '../../../shared/types'
 
 function ExportImageIcon({ className }: { className?: string }) {
@@ -409,9 +411,6 @@ function alignedOriginDomains(
   const S_left = niceStep((leftNat[1] - leftNat[0]) / Math.max(numTicks, 1))
 
   // Count intervals on each side of leftOrigin using ceiling division.
-  // ceil() ensures coverage even when the origin is exactly at the natural boundary.
-  // Minimum 1 on each side so there is always breathing room around the origin,
-  // and so the right domain can represent data on both sides of rightOrigin.
   const kBelow = Math.max(1, Math.ceil((leftOrigin - leftNat[0]) / S_left))
   const kAbove = Math.max(1, Math.ceil((leftNat[1] - leftOrigin) / S_left))
 
@@ -740,6 +739,7 @@ export function GraphTab(): JSX.Element {
   const chartMaxWidth       = useAppStore((s) => s.chartMaxWidth)
   const setChartMaxWidth    = useAppStore((s) => s.setChartMaxWidth)
   const alwaysCommonDates   = useAppStore((s) => s.alwaysCommonDates)
+  const keybindings         = useAppStore((s) => s.keybindings)
 
   const [selectedSeriesId,  setSelectedSeriesId]  = useState<string | null>(null)
   const [selectedSeriesTab, setSelectedSeriesTab] = useState<'format' | 'calculations' | 'save'>('format')
@@ -764,6 +764,8 @@ export function GraphTab(): JSX.Element {
     document.addEventListener('mousedown', h)
     return () => document.removeEventListener('mousedown', h)
   }, [exportOpen])
+  const closeExportMenu = useCallback(() => setExportOpen(false), [])
+  useDropdownKeyboard(exportRef, exportOpen, closeExportMenu)
 
   const handleExportPNG = useCallback(async () => {
     setExportOpen(false)
@@ -874,18 +876,28 @@ export function GraphTab(): JSX.Element {
     return maxH > 36 ? maxH : undefined
   }, [activeSeries])
 
-  // Press 'g' to toggle gridlines, 't' to toggle the tooltip price label.
+  // Ref for save handler — lets the keyboard shortcut effect reference it
+  // without a forward-declaration dependency.
+  const handleSaveGraphRef = useRef<() => void>(() => {})
+
+  // Keyboard shortcuts — keys read from the keybindings store (user-configurable).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return
       const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      if (e.key === 'g') setShowGrid(!showGrid)
-      if (e.key === 't') setShowTooltip(prev => !prev)
+      const editable = (e.target as HTMLElement)?.isContentEditable
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || editable) return
+      if (matchesBinding(e, keybindings.toggleGrid)) { e.preventDefault(); setShowGrid(!showGrid) }
+      if (matchesBinding(e, keybindings.toggleTooltip)) { e.preventDefault(); setShowTooltip(prev => !prev) }
+      if (matchesBinding(e, keybindings.setAllReturns)) { e.preventDefault(); for (const s of activeSeries) updateSeries(s.id, { transform: 'returns' }); setAnimKey(k => k + 1) }
+      if (matchesBinding(e, keybindings.setAllIndex)) { e.preventDefault(); for (const s of activeSeries) updateSeries(s.id, { transform: 'cumulative' }); setAnimKey(k => k + 1) }
+      if (matchesBinding(e, keybindings.setAllDrawdown)) { e.preventDefault(); for (const s of activeSeries) updateSeries(s.id, { transform: 'drawdown' }); setAnimKey(k => k + 1) }
+      if (matchesBinding(e, keybindings.saveGraph)) { e.preventDefault(); handleSaveGraphRef.current() }
+      if (matchesBinding(e, keybindings.exportGraph)) { e.preventDefault(); setExportOpen(o => !o) }
+      if (matchesBinding(e, keybindings.addSeries)) { e.preventDefault(); setRightPanel(rightPanel === 'addLine' ? null : 'addLine') }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [showGrid, setShowGrid])
+  }, [showGrid, setShowGrid, keybindings, activeSeries, updateSeries, rightPanel, setRightPanel])
 
   // ── Chart width (Ctrl+scroll to resize) ──────────────────────────────────────
   const chartMaxWidthRef                       = useRef(chartMaxWidth)
@@ -1347,6 +1359,9 @@ export function GraphTab(): JSX.Element {
     return () => document.removeEventListener('mousedown', h)
   }, [saveMenuOpen])
 
+  const closeSaveMenu = useCallback(() => setSaveMenuOpen(false), [])
+  useDropdownKeyboard(saveMenuRef, saveMenuOpen, closeSaveMenu)
+
   const doSave = useCallback(async (asNew: boolean) => {
     setSaveMenuOpen(false)
     const filename = await ipc.graph.save(buildSavedGraph(), asNew ? undefined : (savedFilename ?? undefined))
@@ -1366,6 +1381,7 @@ export function GraphTab(): JSX.Element {
       await doSave(true)
     }
   }, [savedFilename, doSave])
+  handleSaveGraphRef.current = handleSaveGraph
 
   const handleExportGraph = useCallback(async () => {
     setExportOpen(false)
@@ -1674,17 +1690,7 @@ export function GraphTab(): JSX.Element {
         <div className="flex items-center justify-between px-8 h-[108px] shrink-0">
           <div ref={exportTitleRef} className="flex items-center gap-3 leading-none select-none text-foreground" style={WIN_FONT_STYLE}>
             <LineChartIcon className="h-8 w-8 text-primary shrink-0" />
-            <h2
-              ref={titleRef}
-              contentEditable
-              suppressContentEditableWarning
-              spellCheck={false}
-              onBlur={handleTitleBlur}
-              onKeyDown={handleTitleKeyDown}
-              className="text-4xl font-black leading-none outline-none cursor-text caret-blue-500"
-            >
-              {graphTitle}
-            </h2>
+            <h2 className="text-4xl font-black leading-none">Graphs</h2>
           </div>
           {/* Export dropdown */}
           <div ref={exportRef} className="relative">
@@ -1779,14 +1785,20 @@ export function GraphTab(): JSX.Element {
             </div>
           ) : (
             <div data-testid="graph-chart" className="relative flex flex-col w-full gap-2" style={{ maxWidth: `min(${chartMaxWidth}px, calc(100% - 32px))`, transition: 'max-width 0.18s ease-out' }}>
-              {/* Header: graph title left, date window right */}
+              {/* Header: editable graph title left, date window right */}
               <div ref={headerRowRef} className="flex items-center justify-between">
-                <span
-                  className={`text-2xl font-black leading-tight select-none ${WIN_COLOR_CLASS}`}
+                <h3
+                  ref={titleRef}
+                  contentEditable
+                  suppressContentEditableWarning
+                  spellCheck={false}
+                  onBlur={handleTitleBlur}
+                  onKeyDown={handleTitleKeyDown}
+                  className={`text-2xl font-black leading-tight outline-none cursor-text caret-primary ${WIN_COLOR_CLASS}`}
                   style={WIN_FONT_STYLE}
                 >
                   {graphTitle}
-                </span>
+                </h3>
 
                 {uniqueDateLabels.length > 0 && (
                   <div className="flex items-center gap-2">
@@ -2173,16 +2185,6 @@ export function GraphTab(): JSX.Element {
               </div>
             )}
           </AnimatePresence>
-          <AnimatePresence>
-            {rightPanel === 'addLine' && panelMode === 'left' && (
-              <div
-                className="absolute z-10"
-                style={{ left: leftPanelLeft, width: MIN_PANEL_WIDTH, top: panelTop }}
-              >
-                <AddLinePanel key="addLine-left" placement="left" />
-              </div>
-            )}
-          </AnimatePresence>
         </div>
 
         {/* Below-placement panels — outside chartWrap so they don't displace the
@@ -2204,15 +2206,10 @@ export function GraphTab(): JSX.Element {
             </div>
           )}
         </AnimatePresence>
-        <AnimatePresence>
-          {rightPanel === 'addLine' && panelMode === 'below' && (
-            <div className="flex flex-col items-center -mt-16 pb-8" style={{ maxWidth: chartMaxWidth, marginInline: 'auto' }}>
-              <div className="w-full border-t border-border/30 mb-4" />
-              <AddLinePanel key="addLine-below" placement="below" />
-            </div>
-          )}
-        </AnimatePresence>
       </div>
+
+      {/* Add Series modal — self-manages visibility via rightPanel state */}
+      <AddLinePanel />
 
       {/* Save button — bottom-right corner; hidden when clean (already saved, no changes) */}
       <AnimatePresence>

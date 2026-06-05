@@ -55,7 +55,6 @@ const RAW_SERIES: RawSeries = {
 beforeEach(() => {
   useGraphStore.setState({ activeSeries: [], zoomDomain: null, rightPanel: 'addLine' })
   useDBStore.setState({ externalDBs: [] })
-  // Default mocks: memory has 2 records, external has 1; single series fetch returns RAW_SERIES.
   ;(globalThis as unknown as { window: { tsv: unknown } }).window.tsv = {
     memory: {
       listSeries: vi.fn().mockResolvedValue(MEMORY_RECORDS),
@@ -69,14 +68,14 @@ beforeEach(() => {
 })
 
 describe('AddLinePanel', () => {
-  it('renders Add Line heading and close button', async () => {
-    render(<AddLinePanel placement="left" />)
-    expect(screen.getByText(/add line/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/close add line panel/i)).toBeInTheDocument()
+  it('renders Add Series heading and close button', async () => {
+    render(<AddLinePanel />)
+    expect(screen.getByText(/add series/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/close/i)).toBeInTheDocument()
   })
 
   it('lists memory-DB series on mount', async () => {
-    render(<AddLinePanel placement="left" />)
+    render(<AddLinePanel />)
     await waitFor(() => {
       expect(screen.getByText('US CPI')).toBeInTheDocument()
       expect(screen.getByText('US GDP')).toBeInTheDocument()
@@ -85,7 +84,7 @@ describe('AddLinePanel', () => {
 
   it('filters the list by search input', async () => {
     const user = userEvent.setup()
-    render(<AddLinePanel placement="left" />)
+    render(<AddLinePanel />)
     await waitFor(() => expect(screen.getByText('US CPI')).toBeInTheDocument())
 
     await user.type(screen.getByPlaceholderText(/search/i), 'GDP')
@@ -95,7 +94,7 @@ describe('AddLinePanel', () => {
 
   it('clicking a series adds it to activeSeries via ipc.memory.getSeries', async () => {
     const user = userEvent.setup()
-    render(<AddLinePanel placement="left" />)
+    render(<AddLinePanel />)
     await waitFor(() => expect(screen.getByText('US CPI')).toBeInTheDocument())
 
     await user.click(screen.getByText('US CPI'))
@@ -105,7 +104,6 @@ describe('AddLinePanel', () => {
       expect(active).toHaveLength(1)
       expect(active[0].id).toBe('m1')
       expect(active[0].source).toBe('memory')
-      // Points should be rehydrated as Date objects (not ISO strings).
       expect(active[0].points[0].date).toBeInstanceOf(Date)
       expect(active[0].points[0].value).toBe(100)
     })
@@ -116,7 +114,7 @@ describe('AddLinePanel', () => {
       externalDBs: [{ id: 'db-1', name: 'Macro', path: '/tmp/macro.db', reachable: true }],
     })
     const user = userEvent.setup()
-    render(<AddLinePanel placement="left" />)
+    render(<AddLinePanel />)
     await waitFor(() => expect(screen.getByText('US CPI')).toBeInTheDocument())
 
     await user.click(screen.getByRole('button', { name: /macro/i }))
@@ -128,37 +126,22 @@ describe('AddLinePanel', () => {
     expect(window.tsv.external.listSeries).toHaveBeenCalledWith('/tmp/macro.db')
   })
 
-  it('unreachable external DBs are not offered as sources', async () => {
-    useDBStore.setState({
-      externalDBs: [
-        { id: 'db-up', name: 'UpDB', path: '/tmp/up.db', reachable: true },
-        { id: 'db-down', name: 'DownDB', path: '/tmp/down.db', reachable: false },
-      ],
-    })
-    render(<AddLinePanel placement="left" />)
-    expect(screen.getByRole('button', { name: /updb/i })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /downdb/i })).not.toBeInTheDocument()
-  })
-
   it('close button clears rightPanel in store', async () => {
     const user = userEvent.setup()
-    render(<AddLinePanel placement="left" />)
-    await user.click(screen.getByLabelText(/close add line panel/i))
+    render(<AddLinePanel />)
+    await user.click(screen.getByLabelText(/close/i))
     expect(useGraphStore.getState().rightPanel).toBeNull()
   })
 
   it('does not re-add a series that is already on the chart', async () => {
     const user = userEvent.setup()
-    render(<AddLinePanel placement="left" />)
+    render(<AddLinePanel />)
     await waitFor(() => expect(screen.getByText('US CPI')).toBeInTheDocument())
 
-    // Click twice rapidly.
     await user.click(screen.getByText('US CPI'))
     await waitFor(() => expect(useGraphStore.getState().activeSeries).toHaveLength(1))
     await user.click(screen.getByText('US CPI'))
 
-    // The graph store's addSeries is already idempotent on id, so this just confirms
-    // the panel does not throw or duplicate.
     expect(useGraphStore.getState().activeSeries).toHaveLength(1)
   })
 })

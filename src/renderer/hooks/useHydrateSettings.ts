@@ -3,7 +3,7 @@ import { ipc } from '../lib/ipc'
 import { generateComplement } from '../lib/colors'
 import { applyUiTheme } from '../lib/theme'
 import { useDBStore } from '../store/db'
-import { useAppStore } from '../store/app'
+import { useAppStore, DEFAULT_KEYBINDINGS } from '../store/app'
 import type { CustomPaletteEntry } from '../../shared/types'
 
 // Task #25: on mount, load persisted settings via `ipc.settings.get()` and
@@ -61,6 +61,9 @@ export function useHydrateSettings(): void {
         useDBStore.getState().setExternalDBs(settings.externalDBs)
         if (settings.alwaysCommonDates) {
           useAppStore.getState().setAlwaysCommonDates(settings.alwaysCommonDates)
+        }
+        if (settings.keybindings) {
+          useAppStore.getState().setKeybindings({ ...DEFAULT_KEYBINDINGS, ...settings.keybindings })
         }
         // Flip the flag LAST so gated downstream effects see populated stores.
         useAppStore.getState().setSettingsHydrated()
