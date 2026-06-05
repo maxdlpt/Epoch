@@ -1,6 +1,6 @@
 {
   "name": "epoch",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Time Series Visualiser — Electron desktop app for visualising, uploading, and sharing time-series data",
   "main": "./out/main/index.js",
   "author": "",
