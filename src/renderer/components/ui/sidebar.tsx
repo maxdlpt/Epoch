@@ -44,21 +44,26 @@ const Option = ({ icon, title, tab, selected, open, onClick }: OptionProps) => {
   const setActiveTab = useAppStore(s => s.setActiveTab)
   const isSelected = selected === tab
   return (
-    <motion.button
-      layout
+    <button
       onClick={() => { onClick?.(); setActiveTab(tab) }}
       className={`relative flex h-11 w-full items-center rounded-md transition-colors duration-200 ${
         isSelected
-          ? "bg-primary/10 text-primary shadow-sm border-l-2 border-primary"
+          ? "text-primary"
           : "text-muted-foreground hover:bg-accent hover:text-foreground"
       }`}
-      transition={{ layout: { duration: 0.25, ease: [0.4, 0, 0.2, 1] } }}
     >
-      <div className="grid h-full w-12 place-content-center">{icon}</div>
-      {open && (
-        <span className="text-sm font-medium">{title}</span>
+      {isSelected && (
+        <motion.div
+          layoutId="sidebar-tab-indicator"
+          className="absolute inset-0 rounded-md bg-primary/10 shadow-sm border-l-2 border-primary"
+          transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+        />
       )}
-    </motion.button>
+      <div className="relative grid h-full w-12 place-content-center">{icon}</div>
+      {open && (
+        <span className="relative text-sm font-medium">{title}</span>
+      )}
+    </button>
   )
 }
 
@@ -152,21 +157,14 @@ function buildSavedGraphFromSnapshot(snapshot: NonNullable<OpenGraph['snapshot']
 
 function SettingsButton({ open }: { open: boolean }) {
   const toggleSettings = useAppStore(s => s.toggleSettings)
-  const settingsOpen   = useAppStore(s => s.settingsOpen)
   return (
-    <motion.button
-      layout
+    <button
       onClick={toggleSettings}
-      className={`relative flex h-11 w-full items-center rounded-md transition-colors duration-200 ${
-        settingsOpen
-          ? "bg-primary/10 text-primary shadow-sm border-l-2 border-primary"
-          : "text-muted-foreground hover:bg-accent hover:text-foreground"
-      }`}
-      transition={{ layout: { duration: 0.25, ease: [0.4, 0, 0.2, 1] } }}
+      className="relative flex h-11 w-full items-center rounded-md transition-colors duration-200 text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/70"
     >
       <div className="grid h-full w-12 place-content-center"><Settings className="h-4 w-4" /></div>
       {open && <span className="text-sm font-medium">Settings</span>}
-    </motion.button>
+    </button>
   )
 }
 
@@ -294,18 +292,25 @@ export const Sidebar = () => {
         <div className="relative flex items-center group">
           <button
             onClick={handleGraphHeaderClick}
-            className={`relative flex h-11 w-full items-center rounded-md transition-all duration-200 ${
+            className={`relative flex h-11 w-full items-center rounded-md transition-colors duration-200 ${
               isGraphSection
-                ? "bg-primary/10 text-primary shadow-sm border-l-2 border-primary"
+                ? "text-primary"
                 : "text-muted-foreground hover:bg-accent hover:text-foreground"
             }`}
           >
-            <div className="grid h-full w-12 place-content-center"><LineChartIcon className="h-5 w-5" /></div>
+            {isGraphSection && (
+              <motion.div
+                layoutId="sidebar-tab-indicator"
+                className="absolute inset-0 rounded-md bg-primary/10 shadow-sm border-l-2 border-primary"
+                transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+              />
+            )}
+            <div className="relative grid h-full w-12 place-content-center"><LineChartIcon className="h-5 w-5" /></div>
             {open && (
               <>
-                <span className="text-sm font-medium">Graphs</span>
+                <span className="relative text-sm font-medium">Graphs</span>
                 {openGraphs.length > 0 && (
-                  <ChevronDown className={`ml-auto mr-8 h-3.5 w-3.5 transition-transform duration-200 ${graphsExpanded ? '' : '-rotate-90'}`} />
+                  <ChevronDown className={`relative ml-auto mr-8 h-3.5 w-3.5 transition-transform duration-200 ${graphsExpanded ? '' : '-rotate-90'}`} />
                 )}
               </>
             )}

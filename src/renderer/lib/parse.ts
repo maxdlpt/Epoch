@@ -225,7 +225,7 @@ interface CleanResult { value: number; hasPct: boolean }
  * The `hasPct` flag is used at the column level to decide whether values that
  * lack a `%` are decimal fractions that need ×100 conversion.
  */
-function cleanNumericRich(raw: string): CleanResult {
+export function cleanNumericRich(raw: string): CleanResult {
   let s = raw.trim()
   // Accounting-style negatives: (value) → -value
   const isParens = s.startsWith('(') && s.endsWith(')')

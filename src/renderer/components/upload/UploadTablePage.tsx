@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
 import { Check, Plus, X } from 'lucide-react'
-import { parseCSVText, parseClipboardHtml, parseExcelBuffer } from '../../lib/parse'
+import { parseCSVText, parseClipboardHtml, parseExcelBuffer, cleanNumericRich } from '../../lib/parse'
 import { ipc } from '../../lib/ipc'
 import type { DataSeries } from '../../../shared/types'
 
@@ -68,6 +68,19 @@ function displayPct(raw: string): string {
     }
   }
   return raw
+}
+
+/**
+ * Normalize a raw clipboard cell into the grid's "X.XX%" storage format.
+ * Handles scientific notation from IPC clipboard (e.g. "1.148E-2" → "1.1485%"),
+ * percent-signed values ("5.2%" → "5.2%"), and bare decimals ("0.052" → "5.2%").
+ * Returns the original string if it can't be parsed as a number.
+ */
+function toGridPct(raw: string): string {
+  const cleaned = cleanNumericRich(raw)
+  if (isNaN(cleaned.value)) return raw
+  const pct = cleaned.hasPct ? cleaned.value : cleaned.value * 100
+  return `${pct}%`
 }
 
 function seriesToGrid(series: DataSeries[]): Grid {
@@ -241,6 +254,7 @@ export function UploadTablePage({ series, initialGrid, onDone, onCancel }: Props
 
   const tableRef = useRef<HTMLTableElement>(null)
   const addMoreRef = useRef<HTMLInputElement>(null)
+  const pastingRef = useRef(false)
   const [focusedCell, setFocusedCell]       = useState<string | null>(null)
   const [dateError, setDateError]           = useState<string | null>(null)
   const [hoveredHeaderCol, setHoveredHeaderCol] = useState<number | null>(null)
@@ -253,6 +267,7 @@ export function UploadTablePage({ series, initialGrid, onDone, onCancel }: Props
   }, [grid, dateError])
 
   const updateCell = useCallback((ri: number, ci: number, value: string) => {
+    if (pastingRef.current) return // async paste in progress — ignore onChange race
     setGrid((prev) => {
       const next = prev.map((r) => [...r])
       next[ri][ci] = value
@@ -293,6 +308,8 @@ export function UploadTablePage({ series, initialGrid, onDone, onCancel }: Props
 
       e.preventDefault()
       e.stopPropagation()
+      pastingRef.current = true
+      try {
 
       // ── Gather clipboard data ─────────────────────────────────────────────────
       // Capture synchronous data BEFORE any await (browser may discard the
@@ -359,7 +376,7 @@ export function UploadTablePage({ series, initialGrid, onDone, onCancel }: Props
           for (let i = 0; i < totalDataRows; i++) {
             const ri  = i + 1
             const src = valueRows[i] ?? []
-            const vals = [...src]
+            const vals = src.map(v => toGridPct(v))
             while (vals.length < pastedCols) vals.push('')
             if (ri < next.length) {
               next[ri].push(...vals)
@@ -386,14 +403,21 @@ export function UploadTablePage({ series, initialGrid, onDone, onCancel }: Props
             const gridCol = targetCol + ci2
             if (gridCol >= next[0].length) break
             const val = pastedGrid[ri][ci2]
-            // Normalise date column to consistent "dd mmm yyyy" display format
-            next[gridRow][gridCol] = gridRow > 0 && gridCol === 0
-              ? normalizeDateDisplay(val)
-              : val
+            if (gridRow > 0 && gridCol === 0) {
+              next[gridRow][gridCol] = normalizeDateDisplay(val)
+            } else if (gridRow > 0 && gridCol > 0) {
+              next[gridRow][gridCol] = toGridPct(val)
+            } else {
+              next[gridRow][gridCol] = val
+            }
           }
         }
         return next
       })
+
+      } finally {
+        pastingRef.current = false
+      }
     },
     [grid],
   )
